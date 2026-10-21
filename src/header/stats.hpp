@@ -85,9 +85,17 @@ public:
 
     //! current spatial maximum of pile height
     double hmax;
+    double hmax_fluid, hmax_true_fluid;
 
     //! current spatial maximum of speed
     double vmax;
+    
+    // new variables for fluid
+    double vmean_fluid;
+    double realvolume_fluid;
+    double outflowvol_fluid;
+    double erodedvol_fluid;
+    double depositedvol_fluid;
 
     //! the integrated magnitude of acceleration due to internal friction force (based on realvolume not statvolume)
     double forceint;
