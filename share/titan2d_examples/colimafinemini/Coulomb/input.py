@@ -1,11 +1,8 @@
 sim=TitanSimulation(overwrite_output=True)
 
 sim.setGIS(
-    gis_format='GIS_GRASS', 
-    gis_main='../../dem',
-    gis_sub='colimafinemini',
-    gis_mapset='PERMANENT',
-    gis_map='colima'
+    gis_format='GDAL',
+    gis_map='../../dem/colimafinemini.geotiff'
 )
 
 sim.setScale(
@@ -21,7 +18,9 @@ sim.setNumProp(
 sim.setMatModel(
     model='Coulomb',
     int_frict=37.0,
-    bed_frict=27.0
+    bed_frict=27.0,
+    do_erosion=1,
+    erosion_rate=0.1
 )
 sim.addPile(
     pile_type='Cylinder',
@@ -38,7 +37,7 @@ sim.setTimeProps(
 )
 
 sim.setTimeSeriesOutput(
-    vizoutput=('xdmf','meshplot'),
+    vizoutput='xdmf',
     dtime=1.0,
 )
 

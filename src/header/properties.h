@@ -530,7 +530,7 @@ public:
     {
         if(dTimeRestartSaving>0.0)
         {
-            if(cur_time >= ndNextRestartSave)
+            if(cur_time >= ndNextRestartSave - 1e-10)
             {
                 iRestartSaved++; //using isave eliminates roundoff
                 ndNextRestartSave = ((iRestartSaved + 1) * dTimeRestartSaving) / TIME_SCALE;
@@ -550,7 +550,7 @@ public:
     {
         if(dTimeVizOutSaving>0.0)
         {
-            if(cur_time >= ndNextVizOutput)
+            if(cur_time >= ndNextVizOutput - 1e-10)
             {
                 iVizOutSaved++; //using ioutput eliminates roundoff
                 ndNextVizOutput = ((iVizOutSaved + 1) * dTimeVizOutSaving) / TIME_SCALE;
@@ -760,9 +760,9 @@ public:
             MatProps(_scale)
     {
         mu = 0.1;
-        rho = 2700;
-        den_solid = 2700.0;
-        den_fluid = 1200.0;
+        rho = 400;
+        den_solid = 100;
+        den_fluid = 1.29;
         viscosity = 0.1;
         v_terminal = 0.0;
 
@@ -792,7 +792,7 @@ public:
         MatProps::process_input();
 
         double diameter = 0.005;
-        v_terminal = pow(diameter, 2.) * (den_solid - den_fluid) * scale.gravity / (18. * viscosity);
+        v_terminal = 70; //pow(diameter, 2.) * (den_solid - den_fluid) * scale.gravity / (18. * viscosity);
     }
     virtual inline void set_scale(const PileProps *pileprops_ptr = NULL, const FluxProps *fluxprops_ptr = NULL);
     virtual inline void calc_Vslump(const PileProps *pileprops_ptr, const FluxProps *fluxprops_ptr);
@@ -1457,6 +1457,9 @@ public:
     //! array holding the y component of velocity of material extruding from each flux source
     std::vector<double> yVel;
 
+    //! array holding the solid volume fraction of the incoming flux (for TwoPhases model)
+    std::vector<double> vol_fract;
+
 protected:
     double height_scale;
     double length_scale;
@@ -1486,8 +1489,18 @@ public:
         end_time.resize(nsrcs);
         xVel.resize(nsrcs);
         yVel.resize(nsrcs);
+        vol_fract.resize(nsrcs, 1.0);
     }
     //! add flux source
+    virtual void addFluxSource(double m_influx, double m_start_time, double m_end_time, double xcenter, double ycenter,
+                               double majradius, double minradius, double orientation, double Vmagnitude,
+                               double Vdirection, double m_vol_fract)
+    {
+        addFluxSource(m_influx, m_start_time, m_end_time, xcenter, ycenter, majradius, minradius, orientation, Vmagnitude, Vdirection);
+        if (vol_fract.size() < no_of_sources) vol_fract.resize(no_of_sources, 1.0);
+        vol_fract[no_of_sources - 1] = m_vol_fract;
+    }
+
     virtual void addFluxSource(double m_influx, double m_start_time, double m_end_time, double xcenter, double ycenter,
                                double majradius, double minradius, double orientation, double Vmagnitude,
                                double Vdirection)
@@ -1504,6 +1517,7 @@ public:
         end_time.push_back(m_end_time);
         xVel.push_back(Vmagnitude * cos(Vdirection * PI / 180.0));
         yVel.push_back(Vmagnitude * sin(Vdirection * PI / 180.0));
+        vol_fract.push_back(1.0);
     }
     virtual void scale(double m_length_scale, double m_height_scale, double m_gravity_scale)
     {
