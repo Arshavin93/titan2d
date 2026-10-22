@@ -428,10 +428,10 @@ double Integrator_TwoPhases::get_coef_and_eigen(int ghost_flag)
                 //rule speed if it is smaller) because underestimating speed (which
                 //results in over estimating the timestep) is fatal to stability...
                 Vsolid[0] = hVx_sol[ndx] / h_liq[ndx];
-                Vsolid[1] = 0.0; //hVy_sol[ndx] / h_liq[ndx];
+                Vsolid[1] = hVy_sol[ndx] / h_liq[ndx];
 
                 Vfluid[0] = hVx_liq[ndx] / h[ndx];
-                Vfluid[1] = 0.0; //hVy_liq[ndx] / h[ndx];
+                Vfluid[1] = hVy_liq[ndx] / h[ndx];
 
                 //eigen_(EmTemp->eval_state_vars(u_vec_alt),
                 eigen2ph(h[ndx], h_liq[ndx], eigenvxymax_[0][ndx],

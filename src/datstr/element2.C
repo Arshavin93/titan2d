@@ -1917,7 +1917,7 @@ double Element::calc_elem_edge_wetness_factor(int ineigh, double dt)
             VxVy[0] *= (1.0 + 2.0 * a / fabs(VxVy[0])) / dx(0);
         }
 
-        VxVy[1] = 0.0;
+        VxVy[1] = state_vars(3) / state_vars(1);
         if(VxVy[1] != 0.0)
         {
             a = sqrt(effect_kactxy(1) * gravity(2) * state_vars(1) + (state_vars(0) - state_vars(1)) * gravity(2));
@@ -1933,7 +1933,7 @@ double Element::calc_elem_edge_wetness_factor(int ineigh, double dt)
             VxVy[0] *= (1.0 + 2.0 * a / fabs(VxVy[0])) / dx(0);
         }
 
-        VxVy[1] = 0.0; //state_vars(2) / state_vars(0);
+        VxVy[1] = state_vars(2) / state_vars(0);
         if(VxVy[1] != 0.0)
         {
             a = sqrt(effect_kactxy(1) * gravity(2) * state_vars(0));
