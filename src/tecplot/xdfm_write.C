@@ -44,20 +44,6 @@ void xdmf_fclose(ofstream &);
 int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable, TimeProps *timeprops_ptr, MatProps *matprops_ptr,
                MapNames *mapnames, const int mode, const char * output_prefix)
 {
-    static double last_written_time = -1.0;
-    if (mode == XDMF_CLOSE && timeprops_ptr->timesec() == last_written_time) {
-        // Avoid duplicate final block
-        int myid;
-        MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-        ofstream xdmf;
-        char xmlf_filename[256];
-        sprintf(xmlf_filename, "%s_xdmf_p%04d.xmf", output_prefix,myid);
-        xdmf.open(xmlf_filename, ios::app);
-        xdmf_fclose(xdmf);
-        xdmf.close();
-        return 0;
-    }
-    last_written_time = timeprops_ptr->timesec();
     int myid;
     MPI_Comm_rank(MPI_COMM_WORLD, &myid);
 
@@ -74,8 +60,7 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
     }
 
     //if Need to have generic form, do vector of vectors
-    vector<double> pheight, fheight, xmom, ymom, fxmom, fymom, xcoord, ycoord, zcoord;
-    vector<double> entrain_rate;  // signed local entrainment rate [m/s]: +in, -out
+    vector<double> pheight, xmom, ymom, xcoord, ycoord, zcoord;
     vector<int> C1, C2, C3, C4;
     int num_nodes = 0, num_elm = 0;
     int i, j, k;
@@ -102,13 +87,8 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
             if(!(EmTemp->refined_flag()))
             {
                 pheight.push_back(EmTemp->state_vars(0) * matprops_ptr->scale.height);
-                fheight.push_back(EmTemp->state_vars(1) * matprops_ptr->scale.height);
                 xmom.push_back(EmTemp->state_vars(2) * momentum_scale);
                 ymom.push_back(EmTemp->state_vars(3) * momentum_scale);
-                fxmom.push_back(EmTemp->state_vars(4) * momentum_scale);
-                fymom.push_back(EmTemp->state_vars(5) * momentum_scale);
-                // Signed local fluid entrainment rate [m/s] (+ve = into mixture, -ve = out)
-                entrain_rate.push_back(EmTemp->Influx(5) * (matprops_ptr->scale.height * sqrt(matprops_ptr->scale.gravity / matprops_ptr->scale.length)));
                 num_elm++;
                 for(j = 0; j < 4; j++)
                 {
@@ -171,21 +151,9 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
     /* Write Variable Data */
     double *vars = new double[num_elm];
     
-    //Pile Height (Total Height)
+    //Pile Height
     copy(pheight.begin(), pheight.end(), vars);
     GH5_write_state_vars(h5fid, num_elm, vars, "PILE_HEIGHT");
-    
-    //Solid Height
-    copy(fheight.begin(), fheight.end(), vars);
-    GH5_write_state_vars(h5fid, num_elm, vars, "SOLID_HEIGHT");
-    
-    //True Fluid Height (Total - Solid)
-    vector<double> true_fheight(num_elm);
-    for(i=0; i<num_elm; i++) {
-        true_fheight[i] = pheight[i] - fheight[i];
-    }
-    copy(true_fheight.begin(), true_fheight.end(), vars);
-    GH5_write_state_vars(h5fid, num_elm, vars, "FLUID_HEIGHT");
     
     //X-Momentum
     copy(xmom.begin(), xmom.end(), vars);
@@ -194,18 +162,6 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
     //Y-Momentum
     copy(ymom.begin(), ymom.end(), vars);
     GH5_write_state_vars(h5fid, num_elm, vars, "YMOMENTUM");
-    
-    //Fluid X-Momentum
-    copy(fxmom.begin(), fxmom.end(), vars);
-    GH5_write_state_vars(h5fid, num_elm, vars, "FLUID_XMOMENTUM");
-    
-    //Fluid Y-Momentum
-    copy(fymom.begin(), fymom.end(), vars);
-    GH5_write_state_vars(h5fid, num_elm, vars, "FLUID_YMOMENTUM");
-    
-    //Signed fluid entrainment rate (+ve into mixture, -ve out)
-    copy(entrain_rate.begin(), entrain_rate.end(), vars);
-    GH5_write_state_vars(h5fid, num_elm, vars, "ENTRAINMENT_RATE");
     
     delete[] vars;
     GH5_fclose(h5fid);
@@ -239,13 +195,6 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
     xdmf << "\t\t" << hdf5file << ":/Properties/PILE_HEIGHT" << endl;
     xdmf << "</DataItem>" << endl;
     xdmf << "</Attribute>" << endl;
-    // solid-height
-    xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Solid Height\">" << endl;
-    xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
-    xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/SOLID_HEIGHT" << endl;
-    xdmf << "</DataItem>" << endl;
-    xdmf << "</Attribute>" << endl;
     // x-momentum
     xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"X_Momentum\">" << endl;
     xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
@@ -258,34 +207,6 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
     xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
     xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
     xdmf << "\t\t" << hdf5file << ":/Properties/YMOMENTUM" << endl;
-    xdmf << "</DataItem>" << endl;
-    xdmf << "</Attribute>" << endl;
-    // fluid-height
-    xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Fluid Height\">" << endl;
-    xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
-    xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/FLUID_HEIGHT" << endl;
-    xdmf << "</DataItem>" << endl;
-    xdmf << "</Attribute>" << endl;
-    // fluid x-momentum
-    xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Fluid X_Momentum\">" << endl;
-    xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
-    xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/FLUID_XMOMENTUM" << endl;
-    xdmf << "</DataItem>" << endl;
-    xdmf << "</Attribute>" << endl;
-    // fluid y-momentum
-    xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Fluid Y_Momentum\">" << endl;
-    xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
-    xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/FLUID_YMOMENTUM" << endl;
-    xdmf << "</DataItem>" << endl;
-    xdmf << "</Attribute>" << endl;
-    // fluid entrainment rate: signed [m/s], +ve = fluid INTO mixture, -ve = OUT
-    xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Entrainment Rate\">" << endl;
-    xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
-    xdmf << "Dimensions=\"" << num_elm << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/ENTRAINMENT_RATE" << endl;
     xdmf << "</DataItem>" << endl;
     xdmf << "</Attribute>" << endl;
     xdmf << "</Grid>" << endl;
@@ -301,20 +222,6 @@ int write_xdmf_two_phases(ElementsHashTable *El_Table, NodeHashTable *NodeTable,
 int write_xdmf_single_phase(ElementsHashTable *El_Table, NodeHashTable *NodeTable, TimeProps *timeprops_ptr, MatProps *matprops_ptr,
                MapNames *mapnames, const int mode, const char * output_prefix)
 {
-    static double last_written_time_sp = -1.0;
-    if (mode == XDMF_CLOSE && timeprops_ptr->timesec() == last_written_time_sp) {
-        // Avoid duplicate final block
-        int myid;
-        MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-        ofstream xdmf;
-        char xdmf_filename[256];
-        sprintf(xdmf_filename, "%s_xdmf_p%04d.xmf", output_prefix,myid);
-        xdmf.open(xdmf_filename, ios::app);
-        xdmf_fclose(xdmf);
-        xdmf.close();
-        return 0;
-    }
-    last_written_time_sp = timeprops_ptr->timesec();
     int myid;
     MPI_Comm_rank(MPI_COMM_WORLD, &myid);
     ofstream xdmf;
@@ -498,7 +405,7 @@ int write_xdmf_single_phase(ElementsHashTable *El_Table, NodeHashTable *NodeTabl
     xdmf << "<Attribute Type=\"Scalar\" Center=\"Cell\" Name=\"Pile Height\">" << endl;
     xdmf << "<DataItem DataType=\"Float\" Precision=\"8\" ";
     xdmf << "Dimensions=\"" << num_elem << " 1\" Format=\"HDF\">" << endl;
-    xdmf << "\t\t" << hdf5file << ":/Properties/FLUID_HEIGHT" << endl;
+    xdmf << "\t\t" << hdf5file << ":/Properties/PILE_HEIGHT" << endl;
     xdmf << "</DataItem>" << endl;
     xdmf << "</Attribute>" << endl;
     // x-momentum

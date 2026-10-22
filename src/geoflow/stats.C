@@ -40,9 +40,7 @@ StatProps::StatProps(ElementsHashTable *_ElemTable, NodeHashTable* _NodeTable):
     timereached = -1.0;
     xcen = ycen = xvar = yvar = rmean = area = vmean = vxmean = vymean = slopemean = vstar = 0.0;
     realvolume = statvolume = outflowvol = erodedvol = depositedvol = cutoffheight = 0.0;
-    realvolume_fluid = outflowvol_fluid = erodedvol_fluid = depositedvol_fluid = 0.0;
     piler = hmax = vmax = forceint = forcebed = 0.0;
-    hmax_fluid = hmax_true_fluid = vmean_fluid = 0.0;
     force_transx = force_transy = force_conx = force_cony = force_gx = force_gy = force_bx = force_by = force_bcx = force_bcy = force_rx = force_ry = 0.0;
     power_trans = power_con = power_g = power_b = power_bc = power_r = 0.0;
     Froude = 0.0;
@@ -59,9 +57,7 @@ StatProps::StatProps(ElementsHashTable *_ElemTable, NodeHashTable* _NodeTable, c
     timereached = -1.0;
     xcen = ycen = xvar = yvar = rmean = area = vmean = vxmean = vymean = slopemean = vstar = 0.0;
     realvolume = statvolume = outflowvol = erodedvol = depositedvol = cutoffheight = 0.0;
-    realvolume_fluid = outflowvol_fluid = erodedvol_fluid = depositedvol_fluid = 0.0;
     piler = hmax = vmax = forceint = forcebed = 0.0;
-    hmax_fluid = hmax_true_fluid = vmean_fluid = 0.0;
     force_conx = force_cony = force_gx = force_gy = force_bx = force_by = force_bcx = force_bcy = force_rx = force_ry = 0.0;
     power_con = power_g = power_b = power_bc = power_r = 0.0;
     Froude = 0.0;
@@ -164,7 +160,6 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
     double testvolume = 0.0;
     //double m_slope_ave = 0.0;
     double m_v_max = 0.0, m_v_ave = 0.0, m_vx_ave = 0.0, m_vy_ave = 0.0;
-    double m_v_ave_fluid = 0.0, m_max_height_fluid = 0.0, m_max_height_true_fluid = 0.0;
 
     double xC = 0.0, yC = 0.0, rC = 0.0, m_piler2 = 0.0;
     double m_xVar = 0.0, m_yVar = 0.0;
@@ -195,15 +190,6 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
     if(elementType == ElementType::TwoPhases){
         hVx=&(state_vars_[2][0]);
         hVy=&(state_vars_[3][0]);
-    }
-    
-    double * RESTRICT h_f = NULL;
-    double * RESTRICT hVx_f = NULL;
-    double * RESTRICT hVy_f = NULL;
-    if(elementType == ElementType::TwoPhases){
-        h_f = &(state_vars_[1][0]);
-        hVx_f = &(state_vars_[4][0]);
-        hVy_f = &(state_vars_[5][0]);
     }
 
     TI_ASSUME_ALIGNED(h);
@@ -238,8 +224,8 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
     #pragma omp parallel for schedule(dynamic,TITAN2D_DINAMIC_CHUNK) \
         reduction(min:m_x_min,m_y_min,testpointmindist2) \
         reduction(max:m_x_max,m_y_max,m_v_max,testpointreach) \
-        reduction(max:m_max_height, m_max_height_fluid, m_max_height_true_fluid) \
-        reduction(+:xC,yC,rC,m_area,m_v_ave,m_vx_ave,m_vy_ave,m_v_ave_fluid)\
+        reduction(max:m_max_height) \
+        reduction(+:xC,yC,rC,m_area,m_v_ave,m_vx_ave,m_vy_ave)\
 		reduction(+:m_Vol_,m_Area_,m_Velmean_) \
         reduction(+:m_piler2,testvolume,m_xVar,m_yVar) /*m_slope_ave,m_slopevolume*/
     for(ti_ndx_t ndx = 0; ndx < N; ndx++)
@@ -272,18 +258,6 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
 
                 if(h[ndx] > m_max_height)
                     m_max_height = h[ndx];
-                    
-                if (elementType == ElementType::TwoPhases && h_f != NULL && h_f[ndx] > min_height)
-                {
-                    double dA = dx_[0][ndx] * dx_[1][ndx];
-                    if (h_f[ndx] > m_max_height_fluid)
-                        m_max_height_fluid = h_f[ndx]; // This is actually max solid thickness!
-                    
-                    double true_h_fluid = h[ndx] - h_f[ndx];
-                    if (true_h_fluid > m_max_height_true_fluid)
-                        m_max_height_true_fluid = true_h_fluid;
-                    m_v_ave_fluid += sqrt(hVx_f[ndx] * hVx_f[ndx] + hVy_f[ndx] * hVy_f[ndx]) * dA;
-                }
 
                 if(h[ndx] >= hxyminmax)
                 {
@@ -422,7 +396,7 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
     }
 
     int inttempout;
-    double tempin[18], tempout[18], temp2in[4], temp2out[4];
+    double tempin[17], tempout[17], temp2in[2], temp2out[2];
 
     //find the minimum distance (squared) to the test point
 #ifdef USE_MPI
@@ -459,20 +433,18 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
     tempin[14] = m_Vol_;
     tempin[15] = m_Area_;
     tempin[16] = m_Velmean_;
-    tempin[17] = m_v_ave_fluid;
 
 #ifdef USE_MPI
-    i = MPI_Reduce(tempin, tempout, 18, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    i = MPI_Reduce(tempin, tempout, 16, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 #else //USE_MPI
-    for(int i=0;i<18;++i)tempout[i]=tempin[i];
+    for(int i=0;i<17;++i)tempout[i]=tempin[i];
 #endif //USE_MPI
     temp2in[0] = m_max_height;
     temp2in[1] = m_v_max;
-    temp2in[2] = m_max_height_fluid; temp2in[3] = m_max_height_true_fluid;
 #ifdef USE_MPI
-    i = MPI_Reduce(temp2in, temp2out, 4, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    i = MPI_Reduce(temp2in, temp2out, 2, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 #else //USE_MPI
-    for(int i=0;i<4;++i)temp2out[i]=temp2in[i];
+    for(int i=0;i<2;++i)temp2out[i]=temp2in[i];
 #endif //USE_MPI
 
     if(myid == 0)
@@ -493,7 +465,6 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
         vmean = tempout[4] * VELOCITY_SCALE / tempout[10];
         vxmean = tempout[5] * VELOCITY_SCALE / tempout[10];
         vymean = tempout[6] * VELOCITY_SCALE / tempout[10];
-        vmean_fluid = tempout[17] * VELOCITY_SCALE / tempout[10];
 
         //slopemean = (tempout[9] > 0) ? tempout[7] / tempout[9] : 0.0;
 
@@ -512,7 +483,6 @@ void StatProps::calc_stats(int myid, MatProps* matprops, TimeProps* timeprops,
         //3 standard deviations out ~ 99.5% of the material
         piler = 3.0 * sqrt(xvar + yvar);
         hmax = temp2out[0] * (matprops->scale.height);
-        hmax_fluid = temp2out[2] * (matprops->scale.height); hmax_true_fluid = temp2out[3] * (matprops->scale.height);
         vmax = temp2out[1] * VELOCITY_SCALE;
 
         /* v_star is the nondimensional global average velocity by v_slump
@@ -690,14 +660,6 @@ void StatProps::h5write(H5::CommonFG *parent, string group_name) const
     TiH5_writeDoubleAttribute(group, piler);
     TiH5_writeDoubleAttribute(group, hmax);
     TiH5_writeDoubleAttribute(group, vmax);
-    
-    // new fluid variables
-    TiH5_writeDoubleAttribute(group, hmax_fluid);
-    TiH5_writeDoubleAttribute(group, vmean_fluid);
-    TiH5_writeDoubleAttribute(group, realvolume_fluid);
-    TiH5_writeDoubleAttribute(group, outflowvol_fluid);
-    TiH5_writeDoubleAttribute(group, erodedvol_fluid);
-    TiH5_writeDoubleAttribute(group, depositedvol_fluid);
     TiH5_writeDoubleAttribute(group, forceint);
     TiH5_writeDoubleAttribute(group, forcebed);
     TiH5_writeDoubleAttribute(group, heightifreach);
@@ -734,18 +696,6 @@ void StatProps::h5read(const H5::CommonFG *parent, const  string group_name)
     TiH5_readDoubleAttribute(group, piler);
     TiH5_readDoubleAttribute(group, hmax);
     TiH5_readDoubleAttribute(group, vmax);
-    
-    // new fluid variables (use try block to keep backwards compatibility)
-    try {
-        TiH5_readDoubleAttribute(group, hmax_fluid);
-        TiH5_readDoubleAttribute(group, vmean_fluid);
-        TiH5_readDoubleAttribute(group, realvolume_fluid);
-        TiH5_readDoubleAttribute(group, outflowvol_fluid);
-        TiH5_readDoubleAttribute(group, erodedvol_fluid);
-        TiH5_readDoubleAttribute(group, depositedvol_fluid);
-    } catch (...) {
-        hmax_fluid = hmax_true_fluid = vmean_fluid = realvolume_fluid = outflowvol_fluid = erodedvol_fluid = depositedvol_fluid = 0.0;
-    }
     TiH5_readDoubleAttribute(group, forceint);
     TiH5_readDoubleAttribute(group, forcebed);
     TiH5_readDoubleAttribute(group, heightifreach);

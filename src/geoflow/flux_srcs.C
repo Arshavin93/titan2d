@@ -162,12 +162,6 @@ void Element::calc_flux(NodeHashTable *NodeTable, FluxProps *fluxprops, TimeProp
     Influx(0, 0.0);
     Influx(1, 0.0);
     Influx(2, 0.0);
-    if(NUM_STATE_VARS == 6)
-    {
-        Influx(3, 0.0);
-        Influx(4, 0.0);
-        Influx(5, 0.0);
-    }
     
     //get corner and edge nodes
     for(inode = 0; inode < 8; inode++)
@@ -179,8 +173,8 @@ void Element::calc_flux(NodeHashTable *NodeTable, FluxProps *fluxprops, TimeProp
     for(inode = 0; inode < 9; inode++)
     {
         double temp_coef2 = temp_coef = 0.0;
-        double sum_flux_xmom_ymom[4] =
-        { 0.0, 0.0, 0.0, 0.0 };
+        double sum_flux_xmom_ymom[3] =
+        { 0.0, 0.0, 0.0 };
         Node* ndtemp = (Node*) NodeTable->lookup(node[inode]);
         assert(ndtemp);
         xcoord = ndtemp->coord(0);
@@ -238,10 +232,6 @@ void Element::calc_flux(NodeHashTable *NodeTable, FluxProps *fluxprops, TimeProp
                     sum_flux_xmom_ymom[0] += temp_coef;
                     sum_flux_xmom_ymom[1] += temp_coef * fluxprops->xVel[isrc];
                     sum_flux_xmom_ymom[2] += temp_coef * fluxprops->yVel[isrc];
-                    if (isrc < fluxprops->vol_fract.size())
-                        sum_flux_xmom_ymom[3] += temp_coef * fluxprops->vol_fract[isrc];
-                    else
-                        sum_flux_xmom_ymom[3] += temp_coef; // Default to solid phase
                 }
                 
                 if(temp_coef > temp_coef2)
@@ -259,22 +249,10 @@ void Element::calc_flux(NodeHashTable *NodeTable, FluxProps *fluxprops, TimeProp
         {
             Influx(0, Influx(0) + temp_coef2);
             
-            if (NUM_STATE_VARS == 3)
-            {
-                // SinglePhase
-                Influx(1, Influx(1) + sum_flux_xmom_ymom[1] * temp_coef2 / sum_flux_xmom_ymom[0]);
-                Influx(2, Influx(2) + sum_flux_xmom_ymom[2] * temp_coef2 / sum_flux_xmom_ymom[0]);
-            }
-            else if (NUM_STATE_VARS == 6)
-            {
-                // TwoPhases
-                double vf = sum_flux_xmom_ymom[3] / sum_flux_xmom_ymom[0];
-                Influx(1, Influx(1) + temp_coef2 * vf);
-                Influx(2, Influx(2) + vf * sum_flux_xmom_ymom[1] * temp_coef2 / sum_flux_xmom_ymom[0]);
-                Influx(3, Influx(3) + vf * sum_flux_xmom_ymom[2] * temp_coef2 / sum_flux_xmom_ymom[0]);
-                Influx(4, Influx(4) + (1.0 - vf) * sum_flux_xmom_ymom[1] * temp_coef2 / sum_flux_xmom_ymom[0]);
-                Influx(5, Influx(5) + (1.0 - vf) * sum_flux_xmom_ymom[2] * temp_coef2 / sum_flux_xmom_ymom[0]);
-            }
+            //if(sum_flux_xmom_ymom[0]>0.0) {
+            Influx(1, Influx(1) + sum_flux_xmom_ymom[1] * temp_coef2 / sum_flux_xmom_ymom[0]);
+            Influx(2, Influx(2) + sum_flux_xmom_ymom[2] * temp_coef2 / sum_flux_xmom_ymom[0]);
+            //}
         }
         
     }

@@ -26,7 +26,7 @@
 #include "../header/titan2d_utils.h"
 #include "../header/titan_simulation.h"
 #include "../header/outline.h"
-#include "math.h"
+
 //#include <advisor-annotate.h>double
 
 static void move_data_and_flush(int numprocs, int myid, ElementsHashTable* ElemTable, NodeHashTable* NodeTable,
@@ -67,11 +67,6 @@ Integrator::Integrator(cxxTitanSimulation *_titanSimulation):
     eroded = 0.0;
     deposited = 0.0;
     realvolume = 0.0;
-    eroded_fluid = 0.0;
-    deposited_fluid = 0.0;
-    realvolume_fluid = 0.0;
-    entrain_in = 0.0;
-    entrain_out = 0.0;
 
     force_transx = 0.0;
     force_transy = 0.0;
@@ -116,7 +111,6 @@ Integrator::Integrator(cxxTitanSimulation *_titanSimulation):
 
     int_frict = 37.0;
     frict_tiny = 0.1;
-    //rho_mu = 400;
 
     order=1;
 }
@@ -279,7 +273,7 @@ void Integrator::step()
     double FORCE_SCALE = scale_.gravity * scale_.height * scale_.length * scale_.length;
     double POWER_SCALE = sqrt(scale_.gravity * scale_.length) * FORCE_SCALE;
 
-    double tempin[30], tempout[30];
+    double tempin[25], tempout[25];
     tempin[0] = outflow;    //volume that flew out the boundaries this iteration
     tempin[1] = eroded;     //volume that was eroded this iteration
     tempin[2] = deposited;  //volume that is currently deposited
@@ -305,19 +299,11 @@ void Integrator::step()
     tempin[22] = power_bc;
     tempin[23] = power_r;
     tempin[24] = Fr_;
-    tempin[25] = realvolume_fluid;
-    tempin[26] = eroded_fluid;      // net signed (kept for compat)
-    tempin[27] = deposited_fluid;
-    tempin[28] = 0.0; // outflow_fluid
-    // Split entrainment sign for the mu-I model
-    // For non-mu-I models these stay 0
-    tempin[29] = entrain_in;   // cumulative volume into fluid phase
-    tempin[28] = entrain_out;  // cumulative volume out of fluid phase (negative)
 
 #ifdef USE_MPI
-    MPI_Reduce(tempin, tempout, 30, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(tempin, tempout, 25, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 #else //USE_MPI
-    for(int i=0;i<30;++i)tempout[i]=tempin[i];
+    for(int i=0;i<25;++i)tempout[i]=tempin[i];
 #endif //USE_MPI
 
     statprops_ptr->outflowvol += tempout[0] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
@@ -327,18 +313,6 @@ void Integrator::step()
     statprops_ptr->depositedvol = tempout[2] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
                                   * (matprops_ptr->scale.length);
     statprops_ptr->realvolume = tempout[3] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
-                                * (matprops_ptr->scale.length);
-                                
-    // fluid metrics
-    statprops_ptr->realvolume_fluid = tempout[25] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
-                                * (matprops_ptr->scale.length);
-    // entrain_in: fluid flowing INTO the mixture (positive, tempout[29])
-    statprops_ptr->erodedvol_fluid += tempout[29] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
-                                * (matprops_ptr->scale.length);
-    // entrain_out: fluid expelled FROM the mixture (negative, tempout[28])
-    statprops_ptr->outflowvol_fluid += tempout[28] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
-                                * (matprops_ptr->scale.length);
-    statprops_ptr->depositedvol_fluid = tempout[27] * (matprops_ptr->scale.height) * (matprops_ptr->scale.length)
                                 * (matprops_ptr->scale.length);
 
     statprops_ptr->forceint = tempout[4] / tempout[3] * matprops_ptr->scale.gravity;
@@ -408,14 +382,6 @@ Integrator* Integrator::createIntegrator(const H5::CommonFG *parent, cxxTitanSim
     {
         integrator = new Integrator_TwoPhases_Coulomb(_titanSimulation);
     }
-    else if (integratorType == "Integrator_SinglePhase_mu_I")
-    {
-        integrator = new Integrator_SinglePhase_mu_I(_titanSimulation);
-    }
-    else if (integratorType == "Integrator_TwoPhases_mu_I")
-    {
-        integrator = new Integrator_TwoPhases_mu_I(_titanSimulation);
-    }
     else
     {
         cout << "ERROR: Unknown type of integrator:" << integratorType << "\n";
@@ -439,7 +405,9 @@ Integrator_SinglePhase::Integrator_SinglePhase(cxxTitanSimulation *_titanSimulat
 {
     assert(elementType==ElementType::SinglePhase);
 
-    erosion_rate = 0.7;
+    threshold = 1.0E-02;
+    erosion_rate = 0.1;
+    do_erosion = 0;
 }
 
 void Integrator_SinglePhase::predictor()
@@ -461,11 +429,18 @@ void Integrator_SinglePhase::h5write(H5::CommonFG *parent, string group_name) co
     Integrator::h5write(parent,group_name);
     H5::Group group(TiH5_openGroup(parent, group_name));
     TiH5_writeStringAttribute__(group,"Integrator_SinglePhase","Type");
+    TiH5_writeDoubleAttribute(group,  threshold);
+    TiH5_writeDoubleAttribute(group,  erosion_rate);
+    TiH5_writeIntAttribute(group, do_erosion);
 }
 void Integrator_SinglePhase::h5read(const H5::CommonFG *parent, const  string group_name)
 {
     Integrator::h5read(parent,group_name);
-    H5::Group group(parent->openGroup(group_name));
+    H5::Group group(TiH5_openGroup(parent, group_name));
+    TiH5_readDoubleAttribute(group,  threshold);
+    TiH5_readDoubleAttribute(group,  erosion_rate);
+    TiH5_readIntAttribute(group, do_erosion);
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 Integrator_SinglePhase_Coulomb::Integrator_SinglePhase_Coulomb(cxxTitanSimulation *_titanSimulation):
         Integrator_SinglePhase(_titanSimulation)
@@ -779,7 +754,7 @@ void Integrator_SinglePhase_Coulomb::corrector()
 
         ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+            fluxyp[ivar] = node_flux_[ivar][nyp];
 
         ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -787,7 +762,7 @@ void Integrator_SinglePhase_Coulomb::corrector()
 
         ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+            fluxym[ivar] = node_flux_[ivar][nym];
 
 
         /* the values being passed to correct are for a SINGLE element, NOT a
@@ -1038,9 +1013,8 @@ void Integrator_SinglePhase_Coulomb::corrector()
         else
             elem_deposited = 0.0;
 
-        if(stoppedflags_[ndx]) {
+        if(stoppedflags_[ndx])
             elem_eroded = 0.0;
-        }
 
         elements_[ndx].calc_shortspeed(1.0 / dt);
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1191,7 +1165,7 @@ void Integrator_SinglePhase_Coulomb::flowrecords()
 
             ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+                fluxyp[ivar] = node_flux_[ivar][nyp];
 
             ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -1199,7 +1173,7 @@ void Integrator_SinglePhase_Coulomb::flowrecords()
 
             ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+                fluxym[ivar] = node_flux_[ivar][nym];
 
             double VxVy[2];
             double tanbed = tan(bedfrictang[ndx]);
@@ -1243,7 +1217,7 @@ void Integrator_SinglePhase_Coulomb::flowrecords()
                 unitvx = unitvy = 0.0;
             }
             h_inv = 1.0 / h[ndx];
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
+            Local_Fr = speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon);
 
             //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
             // x direction source terms
@@ -1482,7 +1456,7 @@ void Integrator_SinglePhase_Voellmy_Salm::corrector()
 
         ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+            fluxyp[ivar] = node_flux_[ivar][nyp];
 
         ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -1490,7 +1464,7 @@ void Integrator_SinglePhase_Voellmy_Salm::corrector()
 
         ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+            fluxym[ivar] = node_flux_[ivar][nym];
 
 
         double VxVy[2];
@@ -1620,12 +1594,12 @@ void Integrator_SinglePhase_Voellmy_Salm::corrector()
 
             drag_y = fabs( dt * ( forceinty + forcebedy + forcebedy_curv) );
 
-            //Ustore[2] = 0.0; //Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
+            //Ustore[2] = Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
 
             
 
             if ( inertial_y > drag_y )
-            	Ustore[2] = 0.0; //Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
+            	Ustore[2] = Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
     	    else
     	    	Ustore[2] = 0.0;
 
@@ -1655,9 +1629,8 @@ void Integrator_SinglePhase_Voellmy_Salm::corrector()
         else
             elem_deposited = 0.0;
 
-        if(stoppedflags_[ndx]) {
+        if(stoppedflags_[ndx])
             elem_eroded = 0.0;
-        }
 
         elements_[ndx].calc_shortspeed(1.0 / dt);
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1757,7 +1730,7 @@ void Integrator_SinglePhase_Voellmy_Salm::flowrecords()
 
             ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+                fluxyp[ivar] = node_flux_[ivar][nyp];
 
             ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -1765,7 +1738,7 @@ void Integrator_SinglePhase_Voellmy_Salm::flowrecords()
 
             ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+                fluxym[ivar] = node_flux_[ivar][nym];
 
 
             double VxVy[2];
@@ -1809,7 +1782,7 @@ void Integrator_SinglePhase_Voellmy_Salm::flowrecords()
                 unitvy = 0.0;
             }
 
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
+            Local_Fr = speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon);
 
             //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
             // x direction source terms
@@ -2065,7 +2038,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::corrector()
 
         ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+            fluxyp[ivar] = node_flux_[ivar][nyp];
 
         ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -2073,7 +2046,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::corrector()
 
         ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+            fluxym[ivar] = node_flux_[ivar][nym];
 
 
         double VxVy[2];
@@ -2148,7 +2121,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::corrector()
                 unitvy = 0.0;
             }
             // Calculation of Froude number
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
+            Local_Fr = speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon);
 
             //ccccccccccccccc Calculation of mu_bed(Local_Fr,h) ccccccccccccccccc
 
@@ -2241,9 +2214,8 @@ void Integrator_SinglePhase_Pouliquen_Forterre::corrector()
         else
             elem_deposited = 0.0;
 
-        if(stoppedflags_[ndx]) {
+        if(stoppedflags_[ndx])
             elem_eroded = 0.0;
-        }
 
         elements_[ndx].calc_shortspeed(1.0 / dt);
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2345,7 +2317,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::flowrecords()
 
             ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+                fluxyp[ivar] = node_flux_[ivar][nyp];
 
             ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -2353,7 +2325,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::flowrecords()
 
             ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
             for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+                fluxym[ivar] = node_flux_[ivar][nym];
 
 
             double VxVy[2];
@@ -2396,7 +2368,7 @@ void Integrator_SinglePhase_Pouliquen_Forterre::flowrecords()
                 unitvx = 0.0;
                 unitvy = 0.0;
             }
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
+            Local_Fr = speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon);
 
             //ccccccccccccccc Calculation of mu_bed(Local_Fr,h) ccccccccccccccccc
 
@@ -2713,7 +2685,7 @@ void Integrator_TwoPhases_Coulomb::corrector()
 
         ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
+            fluxyp[ivar] = node_flux_[ivar][nyp];
 
         ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
@@ -2721,7 +2693,7 @@ void Integrator_TwoPhases_Coulomb::corrector()
 
         ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
         for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
+            fluxym[ivar] = node_flux_[ivar][nym];
 
 
         /* the values being passed to correct are for a SINGLE element, NOT a
@@ -2755,14 +2727,8 @@ void Integrator_TwoPhases_Coulomb::corrector()
                 kactxy[i] = effect_kactxy_[i][ndx];
 
             // fluid velocities
-            double hfluid = h[ndx] - h_liq[ndx];
-            if (hfluid > GEOFLOW_TINY) {
-                Vfluid[0] = hVx_liq[ndx] / hfluid;
-                Vfluid[1] = hVy_liq[ndx] / hfluid;
-            } else {
-                Vfluid[0] = 0.0;
-                Vfluid[1] = 0.0;
-            }
+            Vfluid[0] = hVx_liq[ndx] / h[ndx];
+            Vfluid[1] = hVy_liq[ndx] / h[ndx];
 
             // volume fractions
             volf = h_liq[ndx] / h[ndx];
@@ -2910,7 +2876,7 @@ void Integrator_TwoPhases_Coulomb::corrector()
             t4 = h_liq[ndx] * g[1];
             //    drag term
             t5 = drag[1];
-            Ustore[3] = 0.0; //Ustore[3] + dt * (t1 - t2 - t3 + t4 + t5);
+            Ustore[3] = Ustore[3] + dt * (t1 - t2 - t3 + t4 + t5);
 
             //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
             //    fluid fraction x-direction source terms
@@ -2928,30 +2894,12 @@ void Integrator_TwoPhases_Coulomb::corrector()
             t4 = h[ndx] * g[1];
             //    drag force on fluid
             t5 = drag[3];
-            Ustore[5] = 0.0; //Ustore[5] + dt * (t4 - t5);
+            Ustore[5] = Ustore[5] + dt * (t4 - t5);
         }
 
         // computation of magnitude of friction forces for statistics
         elem_forceint = unitvx * forceintx + unitvy * forceinty;
         elem_forcebed = unitvx * forcebedx + unitvy * forcebedy;
-
-        // clamp thickness to avoid NaNs in source terms
-        Ustore[0] = c_dmax1(Ustore[0], 0.0);
-        Ustore[1] = c_dmax1(Ustore[1], 0.0);
-
-        if (Ustore[0] == 0.0 && Ustore[1] == 0.0)
-        {
-            Ustore[2] = 0.0; Ustore[3] = 0.0;
-            Ustore[4] = 0.0; Ustore[5] = 0.0;
-        }
-        else if (Ustore[1] == 0.0)
-        {
-            Ustore[2] = 0.0; Ustore[3] = 0.0;
-        }
-        else if (Ustore[0] == 0.0)
-        {
-            Ustore[4] = 0.0; Ustore[5] = 0.0;
-        }
 
         // update the state variables
         for (i = 0; i < 6; ++i)
@@ -2969,9 +2917,8 @@ void Integrator_TwoPhases_Coulomb::corrector()
         else
             elem_deposited = 0.0;
 
-        if(stoppedflags_[ndx]) {
+        if(stoppedflags_[ndx])
             elem_eroded = 0.0;
-        }
 
         elements_[ndx].calc_shortspeed(1.0 / dt);
 
@@ -3016,1341 +2963,7 @@ void Integrator_TwoPhases_Coulomb::h5read(const H5::CommonFG *parent, const  str
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-Integrator_SinglePhase_mu_I::Integrator_SinglePhase_mu_I(cxxTitanSimulation *_titanSimulation):
-        Integrator_SinglePhase(_titanSimulation)
-{
-    assert(elementType==ElementType::SinglePhase);
-    assert(order==1);
-    
-    //stopping_criteria=0;
 
-    mu_s = 0.5;
-    mu_2 = 0.7;
-    d = 0.1;
-    L_material = 0.25;
-    Beta = 0.6;
-    //rho = 400;
-}
-
-bool Integrator_SinglePhase_mu_I::scale()
-{
-    if(Integrator_SinglePhase::scale())
-    {
-        d = d/scale_.height;
-        L_material = L_material/scale_.height;
-        return true;
-    }
-    return false;
-}
-bool Integrator_SinglePhase_mu_I::unscale()
-{
-    if(Integrator_SinglePhase::unscale())
-    {
-        d = d*scale_.height;
-        L_material = L_material*scale_.height;
-        return true;
-    }
-    return false;
-}
-void Integrator_SinglePhase_mu_I::print0(int spaces)
-{
-    printf("%*cIntegrator: single phase, mu_I model, first order\n", spaces,' ');
-    printf("%*cmu_s:%.3f\n", spaces+4,' ',mu_s);
-    printf("%*cmu_2:%.3f\n", spaces+4,' ',mu_2);
-    printf("%*cd:%.3f\n", spaces+4,' ',scaled?d*scale_.height:d);
-    printf("%*cL_material:%.3e\n", spaces+4,' ',scaled?L_material*scale_.height:L_material);
-    printf("%*cBeta:%.3f\n", spaces+4,' ',Beta);
-    
-    Integrator_SinglePhase::print0(spaces+4);
-}
-
-void Integrator_SinglePhase_mu_I::predictor()
-{
-}
-
-void Integrator_SinglePhase_mu_I::corrector() 
-{
-    // for comparison of magnitudes of forces in slumping piles
-    double m_forceint = 0.0;
-    double m_forcebed = 0.0;
-    double m_eroded = 0.0;
-    double m_deposited = 0.0;
-    double m_realvolume = 0.0;
-    double m_realvolume_fluid = 0.0;
-
-    // convinience ref
-    tivector<double> *g = gravity_;
-
-    #pragma omp parallel for schedule(dynamic, TITAN2D_DINAMIC_CHUNK) \
-        reduction(+: m_forceint, m_forcebed, m_eroded, m_deposited, m_realvolume, m_realvolume_fluid)
-    for(ti_ndx_t ndx = 0; ndx < elements_.size(); ndx++)
-    {
-        if(adapted_[ndx] <= 0)continue;//if this element does not belong on this processor don't involve!!!
-        //if first order states was not updated as there is no predictor
-        if(order==1)
-        {
-            for (int i = 0; i < NUM_STATE_VARS; i++)
-                prev_state_vars_[i][ndx]=state_vars_[i][ndx];
-        }
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        double elem_forceint;
-        double elem_forcebed;
-        double elem_eroded;
-        double elem_deposited;
-
-        double dxdy = dx_[0][ndx] * dx_[1][ndx];
-        double dtdx = dt / dx_[0][ndx];
-        double dtdy = dt / dx_[1][ndx];
-
-        int xp = positive_x_side_[ndx];
-        int yp = (xp + 1) % 4;
-        int xm = (xp + 2) % 4;
-        int ym = (xp + 3) % 4;
-
-        int ivar, j, k;
-
-        double fluxxp[NUM_STATE_VARS], fluxyp[NUM_STATE_VARS];
-        double fluxxm[NUM_STATE_VARS], fluxym[NUM_STATE_VARS];
-
-        ti_ndx_t nxp = node_key_ndx_[xp + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxxp[ivar] = node_flux_[ivar][nxp];
-
-        ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
-
-        ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxxm[ivar] = node_flux_[ivar][nxm];
-
-        ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
-
-        double VxVy[2];
-        if(h[ndx] > tiny)
-        {
-            VxVy[0] = hVx[ndx] / h[ndx];
-            VxVy[1] = hVy[ndx] / h[ndx];
-        }
-        else
-        {
-            VxVy[0] = VxVy[1] = 0.0;
-        }
-
-        elements_[ndx].convect_dryline(VxVy[0], VxVy[1], dt); //this is necessary
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        //corrector itself
-        double speed,speed_squared;
-        double forceintx, forceinty;
-        double forcebedx, forcebedy;
-        double forcebedx_curv, forcebedy_curv;
-        double forcegravx, forcegravy;
-        double unitvx, unitvy, tmp, tmpx, tmpy;
-        double Ustore[3];
-        double mu_bed, effect_viscous, A, D_xx, D_xy, D_yy, mu, Local_Fr;
-        double sgn_dudy, sgn_dvdx, sgn_dudx, sgn_dvdy;
-        double inertial_x, inertial_y;
-        double drag_x, drag_y;
-        double unit_dVxdx, unit_dVxdy, unit_dVydx, unit_dVydy, unit_dVxdVy;
-
-        Ustore[0] = prev_state_vars_[0][ndx]
-                - dtdx * (fluxxp[0] - fluxxm[0])
-                - dtdy * (fluxyp[0] - fluxym[0])
-                + dt * Influx_[0][ndx];
-        Ustore[0] = c_dmax1(Ustore[0], 0.0);
-
-        Ustore[1] = prev_state_vars_[1][ndx]
-                - dtdx * (fluxxp[1] - fluxxm[1])
-                - dtdy * (fluxyp[1] - fluxym[1])
-                + dt * Influx_[1][ndx];
-
-        Ustore[2] = prev_state_vars_[2][ndx]
-                - dtdx * (fluxxp[2] - fluxxm[2])
-                - dtdy * (fluxyp[2] - fluxym[2])
-                + dt * Influx_[2][ndx];
-
-        // initialize to zero
-        forceintx = 0.0;
-        forcebedx = 0.0;
-        forcebedx_curv = 0.0;
-        forcebedy_curv = 0.0;
-        forceinty = 0.0;
-        forcebedy = 0.0;
-        unitvx = 0.0;
-        unitvy = 0.0;
-        elem_eroded = 0.0;
-        mu_bed = 0.0;
-        mu = 0.0;
-        unit_dVxdx = 0.0;
-        unit_dVxdy = 0.0;
-        unit_dVydx = 0.0;
-        unit_dVydy = 0.0;
-        unit_dVxdVy = 0.0;
-
-        if(h[ndx] > tiny)
-        {
-        	// Calculate depth-averaged velocities
-            speed = VxVy[0] * VxVy[0] + VxVy[1] * VxVy[1];
-            if (speed > 0.0)
-            {
-                // here speed is speed
-                speed = sqrt(speed);
-                unitvx = VxVy[0] / speed;
-                unitvy = VxVy[1] / speed;
-            }
-            else
-            {
-                unitvx = 0.0;
-                unitvy = 0.0;
-            }
-            
-            // Calculation of Froude number
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
-
-            //ccccccccccccccc Calculation of mu_bed(Local_Fr,h) ccccccccccccccccc
-
-            //Dynamic flow regime
-            double denom = (L_material * Local_Fr) + (h[ndx] * Beta);
-            mu_bed = (denom > GEOFLOW_TINY) ? mu_s + ( mu_2 - mu_s ) * (L_material * Local_Fr) / denom : mu_s;
-
-            // Gravity forces
-            forcegravx = g[0][ndx] * h[ndx];
-            forcegravy = g[1][ndx] * h[ndx];
-
-            // mu(I) rheology implementation from the document
-
-            // 1. Shear rate approximation
-            //double shear_rate = abs_u / h[ndx];
-            // Compute gradient terms
-            double dVx_dx = (dhVx_dx[ndx] - VxVy[0] * dh_dx[ndx]) / h[ndx];
-            double dVy_dy = (dhVy_dy[ndx] - VxVy[1] * dh_dy[ndx]) / h[ndx];
-            double dVx_dy = (dhVx_dy[ndx] - VxVy[0] * dh_dy[ndx]) / h[ndx];
-            double dVy_dx = (dhVy_dx[ndx] - VxVy[1] * dh_dx[ndx]) / h[ndx];
-            
-            if (dVx_dx > 0.0 && dVy_dy > 0.0 && dVx_dy > 0.0 && dVy_dx > 0.0)
-            {
-            	unit_dVxdx = dVx_dx / sqrt(dVx_dx);
-            	unit_dVxdy = dVx_dy / sqrt(dVx_dy);
-            	unit_dVydx = dVy_dx / sqrt(dVy_dx);
-            	unit_dVydy = dVy_dy / sqrt(dVy_dy);
-            	unit_dVxdVy = (dVx_dy + dVy_dx) / sqrt(dVx_dy + dVy_dx);
-            }
-            else
-            {
-            	unit_dVxdx = 0.0;
-            	unit_dVxdy = 0.0;
-            	unit_dVydx = 0.0;
-            	unit_dVydy = 0.0;
-            	unit_dVxdVy = 0.0;
-            }
-
-            // Compute the shear rate
-            
-            double mu = g[0][ndx] / g[2][ndx];
-            
-            double effect_viscous = 0.0;
-            if (mu > mu_s + tiny)
-            {
-                effect_viscous = (2 * L_material * g[0][ndx] * c_dmax1(mu_2 - mu, 0.0)) / (9 * Beta * sqrt(g[2][ndx]) * (mu - mu_s));
-            }
-            
-            //double abs_shear_rate = std::sqrt(0.5 * (dVx_dx * dVx_dx + dVy_dy * dVy_dy + 0.5 * std::pow(dVx_dy + dVy_dx, 2)));
-
-            // 2. Pressure approximation (hydrostatic)
-            //double pressure = g[2][ndx] * h[ndx];
-            // NOTE: The document uses  rho*g*h. You might need to include density (rho)
-
-            // 3. Inertial number
-            //double particle_diameter = d; // Assuming 'd' is a class member
-            //if (abs_shear_rate > tiny)
-            //{
-            //    inertial_number = (2 * particle_diameter * abs_shear_rate) / sqrt(phi * pressure);
-            //}
-            //else
-            //{
-            //    inertial_number = 0.0;
-            //}
-
-            //double inertial_number =
-             //   (particle_diameter * abs_shear_rate) / sqrt(phi * pressure);
-            // NOTE: The document's equation simplifies to  (d * |u|) / (h * sqrt(g*h)) if rho is cancelled.
-
-            // 4. Friction coefficient mu(I)
-            // Standard mu(I) formula
-            //double term_denominator = (I_0 / inertial_number) + 1.0;
-            
-            //if (inertial_number > 0.001)
-            //{
-            //	mu_i = mu_s + (mu_2 - mu_s) / term_denominator;
-            //}
-            //else
-            //{
-            //	mu_i = mu_s + (mu_2 - mu_s) / term_denominator;
-            //	A = 0.001 * std::exp(2 / mu_i * 0.001 * 0.001);
-            //	mu_i = 2 / std::log(A / inertial_number);
-            //}
-
-            // 5. Internal shear stress
-            //double internal_shear_stress = mu_i * pressure;
-
-            // 6. Basal friction force components
-            //double bed_friction = mu_i * pressure;
-            
-            // NOTE: The document uses unit vectors  ubar/|ubar|
-            
-            // Curvature terms (using the same form as Voellmy-Salm and Pouliquen-Forterre)
-            tmp = c_dmax1(g[2][ndx] * h[ndx] + VxVy[0] * hVx[ndx] * curvature_[0][ndx], 0.0);
-            if (tmp > 0.0){
-            	forcebedx = mu_bed * g[2][ndx] * h[ndx] * unitvx;
-            	forcebedx_curv = unitvx * mu_bed * VxVy[0] * hVx[ndx] * curvature_[0][ndx];
-            }
-            
-            // The resisting forces due to flow thickness gradient in x direction
-			//tmp = h_inv * (dhVx_dy[ndx] - VxVy[0] * dh_dy[ndx]);
-            		//tmpx = dVx_dy + dVy_dx;
-            		//sgn_dudy = sgn_tiny(tmpx, frict_tiny);
-            		//sgn_dudx = sgn_tiny(dVx_dx, frict_tiny);
-            		if (effect_viscous > tiny)
-            		{
-            			D_xy = (0.5 * (dVx_dy + dVy_dx));
-            			D_xx = dVx_dx;  
-				forceintx = 1.5 * effect_viscous * sqrt(h[ndx]) * ( D_xx * dh_dx[ndx] + D_xy * dh_dy[ndx] ) * scale_.epsilon;
-			}
-			
-            		//STOPPING CRITERIA
-            		inertial_x = fabs( Ustore[1] + dt * forcegravx );
-
-            		drag_x = fabs( dt * ( forceintx + forcebedx + forcebedx_curv) );
-
-            //Ustore[1] = Ustore[1] + dt * (forcegravx - forcebedx - forcebedx_curv - forceintx);
-
-			if ( inertial_x > drag_x )
-				Ustore[1] = Ustore[1] + dt * (forcegravx - forcebedx - forcebedx_curv - forceintx);
-			else
-				Ustore[1] = 0.0;
-			//cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-			// y direction source terms
-			//cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-
-            tmp = c_dmax1(g[2][ndx] * h[ndx] + VxVy[1] * hVy[ndx] * curvature_[1][ndx], 0.0);
-            if (tmp > 0.0){
-            	forcebedy = mu_bed * g[2][ndx] * h[ndx] * unitvy;
-            	forcebedy_curv = unitvy * mu_bed * VxVy[1] * hVy[ndx] * curvature_[1][ndx];
-            }
-            
-            // The resisting forces due to flow thickness gradient in y direction
-			//tmp = h_inv * (dhVy_dx[ndx] - VxVy[1] * dh_dx[ndx]);
-            		//tmpy = dVy_dx + dVx_dy;
-            		//sgn_dvdx = sgn_tiny(tmpy, frict_tiny);
-            		//sgn_dvdy = sgn_tiny(dVy_dy, frict_tiny);
-			if (effect_viscous > tiny)
-			{
-				D_yy = dVy_dy;
-				forceinty = 1.5 * effect_viscous * sqrt(h[ndx]) * ( D_yy * dh_dy[ndx] + D_xy * dh_dx[ndx] ) * scale_.epsilon;
-			}
-            		
-            		//STOPPING CRITERIA
-            		inertial_y = fabs( Ustore[2] + dt * forcegravy );
-
-            		drag_y = fabs( dt * ( forceinty + forcebedy + forcebedy_curv) );
-
-            //Ustore[2] = 0.0; //Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
-
-            
-
-			if ( inertial_y > drag_y )
-				Ustore[2] = 0.0; //Ustore[2] + dt * (forcegravy - forcebedy - forcebedy_curv - forceinty);
-			else
-				Ustore[2] = 0.0;
-        }
-
-        // For statistics
-        elem_forcebed = unitvx * forcebedx + unitvy * forcebedy;
-        // computation of magnitude of friction forces for statistics
-        elem_forceint = unitvx * forceintx + unitvy * forceinty;
-        //elem_forcebed calculated above
-
-        // update the state variables
-        h[ndx]=Ustore[0];
-        hVx[ndx]=Ustore[1];
-        hVy[ndx]=Ustore[2];
-
-        // end of correct
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        elem_forceint *= dxdy;
-        elem_forcebed *= dxdy;
-        elem_eroded *= dxdy;
-
-
-        if(stoppedflags_[ndx] == 2)
-            elem_deposited = h[ndx] * dxdy;
-        else
-            elem_deposited = 0.0;
-
-        if(stoppedflags_[ndx]) {
-            elem_eroded = 0.0;
-        }
-
-        elements_[ndx].calc_shortspeed(1.0 / dt);
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-		m_forceint += fabs(elem_forceint);
-		m_forcebed += fabs(elem_forcebed);
-		m_realvolume += dxdy * h[ndx];
-		m_realvolume_fluid += dxdy * state_vars_[1][ndx];
-		m_eroded += elem_eroded;
-		m_deposited += elem_deposited;
-
-		// apply bc's
-		for (int j = 0; j < 4; j++)
-			if (neigh_proc_[j][ndx] == INIT) // this is a boundary!
-				for (int k = 0; k < NUM_STATE_VARS; k++)
-					state_vars_[k][ndx] = 0.0;
-	}
-
-	forceint = m_forceint;
-	forcebed = m_forcebed;
-	eroded = m_eroded;
-	deposited = m_deposited;
-	realvolume = m_realvolume;
-	realvolume_fluid = m_realvolume_fluid;
-}
-void Integrator_SinglePhase_mu_I::flowrecords() 
-{
-	// Updating spatial derivatives of State Variables
-	ElemProp.slopes(matprops_ptr);
-
-	double junk = 0.0;
-	// Updating State Variables at edges
-	ElemProp.calc_edge_states(matprops_ptr, timeprops_ptr, this, myid, order, junk);
-
-    // Temporary reduction variables for recording QoIs globally
-	double m_force_transx = 0.0;
-	double m_force_transy = 0.0;
-	double m_force_conx = 0.0;
-	double m_force_cony = 0.0;
-	double m_force_gx = 0.0;
-    double m_force_gy = 0.0;
-    double m_force_bx = 0.0;
-    double m_force_by = 0.0;
-    double m_force_bcx = 0.0;
-    double m_force_bcy = 0.0;
-    double m_force_rx = 0.0;
-    double m_force_ry = 0.0;
-    double m_power_trans = 0.0;
-    double m_power_con = 0.0;
-    double m_power_g = 0.0;
-    double m_power_b = 0.0;
-    double m_power_bc = 0.0;
-    double m_power_r = 0.0;
-    double m_Fr = 0.0;
-    double m_vol = 0.0;
-
-    //double inv_xi= 1.0/xi;
-
-    //convinience ref
-    tivector<double> *g=gravity_;
-
-    // Initializing temporary arrays before searching for locations
-    if (localquants_ptr->no_locations > 0)
-    	for (int iloc = 0; iloc < localquants_ptr->no_locations; iloc++)
-    	{
-    		localquants_ptr->temps[iloc].resize(0);
-    		localquants_ptr->TimeInts[iloc].resize(0);
-    	}
-
-    #pragma omp parallel for schedule(dynamic,TITAN2D_DINAMIC_MIDIUM_CHUNK) \
-        reduction(+: m_force_transx, m_force_transy, m_force_conx, m_force_cony, m_force_gx, m_force_gy) \
-		reduction(+: m_force_bx, m_force_by, m_force_bcx, m_force_bcy, m_force_rx, m_force_ry) \
-		reduction(+: m_power_trans, m_power_con, m_power_g, m_power_b, m_power_bc, m_power_r, m_Fr, m_vol)
-    for(ti_ndx_t ndx = 0; ndx < elements_.size(); ndx++)
-    {
-        if(adapted_[ndx] <= 0)continue;//if this element does not belong on this processor don't involve!!!
-
-        if(h[ndx] > localquants_ptr->thr)
-        {
-            ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            double dxdy = dx_[0][ndx] * dx_[1][ndx];
-            double dtdx = dt / dx_[0][ndx];
-            double dtdy = dt / dx_[1][ndx];
-
-            int xp = positive_x_side_[ndx];
-            int yp = (xp + 1) % 4;
-            int xm = (xp + 2) % 4;
-            int ym = (xp + 3) % 4;
-
-            int ivar;
-
-            double fluxxp[MAX_NUM_STATE_VARS], fluxyp[MAX_NUM_STATE_VARS];
-            double fluxxm[MAX_NUM_STATE_VARS], fluxym[MAX_NUM_STATE_VARS];
-
-
-            ti_ndx_t nxp = node_key_ndx_[xp + 4][ndx];
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxxp[ivar] = node_flux_[ivar][nxp];
-
-            ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxyp[ivar] = 0.0; //node_flux_[ivar][nyp];
-
-            ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxxm[ivar] = node_flux_[ivar][nxm];
-
-            ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                fluxym[ivar] = 0.0; //node_flux_[ivar][nym];
-
-
-            double VxVy[2];
-            
-            VxVy[0] = hVx[ndx] / h[ndx];
-            VxVy[1] = hVy[ndx] / h[ndx];
-            
-            //////////////////////////////////////////////////////////////
-            double speed, tmp, tmpx, tmpy;
-            double forcetransx, forcetransy;
-            double forceconvectx, forceconvecty;
-            double forceintx, forceinty;
-            double forcebedx, forcebedy;
-            double forcebedx_curv, forcebedy_curv;
-            double forcegravx , forcegravy;
-            double unitvx, unitvy, Local_Fr;
-            double mu_bed, mu, abs_shear_rate, inertial_number, A, D_xx, D_yy, D_xy;
-            double sgn_dudy, sgn_dvdx, sgn_dudx, sgn_dvdy;
-            double unit_dVxdx, unit_dVxdy, unit_dVydx, unit_dVydy, unit_dVxdVy;
-
-            // initialize to zero
-            forcetransx = forcetransy = 0.0;
-            forceintx = forcebedx = 0.0;
-            forcebedx_curv = forcebedy_curv = 0.0;
-            forceinty = forcebedy = 0.0;
-            unitvx = unitvy = 0.0;
-            unit_dVxdx = 0.0;
-            unit_dVxdy = 0.0;
-            unit_dVydx = 0.0;
-            unit_dVydy = 0.0;
-            unit_dVxdVy = 0.0;
-
-            // S terms
-            // here speed is speed squared
-        	speed = VxVy[0] * VxVy[0] + VxVy[1] * VxVy[1];
-
-            if (speed > 0.0)
-            {
-
-                speed = sqrt(speed);
-
-                unitvx = VxVy[0] / speed;
-                unitvy = VxVy[1] / speed;
-            }
-            else
-            {
-                unitvx = 0.0;
-                unitvy = 0.0;
-            }
-
-            Local_Fr = (h[ndx] > GEOFLOW_TINY) ? speed / sqrt( g[2][ndx] * h[ndx] * scale_.epsilon) : 0.0;
-            
-            double denom = (L_material * Local_Fr) + (h[ndx] * Beta);
-            mu_bed = (denom > GEOFLOW_TINY) ? mu_s + ( mu_2 - mu_s ) * (L_material * Local_Fr) / denom : mu_s;
-            
-            // 1. Shear rate approximation
-            //double shear_rate = abs_u / h[ndx];
-            // Compute gradient terms
-            double dVx_dx = (dhVx_dx[ndx] - VxVy[0] * dh_dx[ndx]) / h[ndx];
-            double dVy_dy = (dhVy_dy[ndx] - VxVy[1] * dh_dy[ndx]) / h[ndx];
-            double dVx_dy = (dhVx_dy[ndx] - VxVy[0] * dh_dy[ndx]) / h[ndx];
-            double dVy_dx = (dhVy_dx[ndx] - VxVy[1] * dh_dx[ndx]) / h[ndx];
-            
-            if (dVx_dx > 0.0 && dVy_dy > 0.0 && dVx_dy > 0.0 && dVy_dx > 0.0)
-            {
-            	unit_dVxdx = dVx_dx / sqrt(dVx_dx);
-            	unit_dVxdy = dVx_dy / sqrt(dVx_dy);
-            	unit_dVydx = dVy_dx / sqrt(dVy_dx);
-            	unit_dVydy = dVy_dy / sqrt(dVy_dy);
-            	unit_dVxdVy = (dVx_dy + dVy_dx) / sqrt(dVx_dy + dVy_dx);
-            }
-            else
-            {
-            	unit_dVxdx = 0.0;
-            	unit_dVxdy = 0.0;
-            	unit_dVydx = 0.0;
-            	unit_dVydy = 0.0;
-            	unit_dVxdVy = 0.0;
-            }
-
-
-            // Compute the shear rate
-            //double abs_shear_rate = std::sqrt(dVx_dx * dVx_dx + dVy_dy * dVy_dy + 0.5 * std::pow(dVx_dy + dVy_dx, 2));
-            //double mu = g[0][ndx] / g[2][ndx];
-            
-            double effect_viscous = (2* L_material* g[0][ndx]* (mu_2 - mu)) / (9* Beta * sqrt(g[2][ndx]) * (mu - mu_s));
-
-            // 2. Pressure approximation (hydrostatic)
-            //double pressure = g[2][ndx] * h[ndx];
-            // NOTE: The document uses  rho*g*h. You might need to include density (rho)
-
-            // 3. Inertial number
-            //double particle_diameter = d; // Assuming 'd' is a class member
-            //if (abs_shear_rate > tiny)	
-            //{
-            //    inertial_number = (2 * particle_diameter * abs_shear_rate) / sqrt(phi * pressure);
-            //}
-            //else
-            //{
-            //    inertial_number = 0.0;
-            //}
-
-            //double inertial_number =
-             //   (particle_diameter * abs_shear_rate) / sqrt(phi * pressure);
-            // NOTE: The document's equation simplifies to  (d * |u|) / (h * sqrt(g*h)) if rho is cancelled.
-
-            // 4. Friction coefficient mu(I)
-            // Standard mu(I) formula
-            //double term_denominator = (I_0 / inertial_number) + 1.0;
-            
-            //if (inertial_number > 0.001)
-            //{
-            //	mu_i = mu_s + (mu_2 - mu_s) / term_denominator;
-            //}
-            //else
-            //{
-            //	mu_i = mu_s + (mu_2 - mu_s) / term_denominator;
-            //	A = 0.001 * std::exp(2 / mu_i * 0.001 * 0.001);
-            //	mu_i = 2 / std::log(A / inertial_number);
-            //}
-
-            // 5. Internal shear stress
-            //double internal_shear_stress = mu_i * pressure;
-
-            // 6. Basal friction force components
-            //double bed_friction = mu_i * pressure;
-            
-            // NOTE: The document uses unit vectors  ubar/|ubar|
-            
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            // x direction source terms
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-            // the transient force in the x direction
-            forcetransx = (hVx[ndx] - prev_state_vars_[1][ndx]) / dt;
-
-            // the convective in x direction
-            forceconvectx = (fluxxp[1] - fluxxm[1]) / dx_[0][ndx] + (fluxyp[1] - fluxym[1]) / dx_[1][ndx];
-
-			// The gravity force in the x direction
-			forcegravx = g[0][ndx] * h[ndx];
-
-			// Basal friction force in x direction (with curvature)
-            // Curvature terms (using the same form as Voellmy-Salm and Pouliquen-Forterre)
-            tmp = c_dmax1(g[2][ndx] * h[ndx] + VxVy[0] * hVx[ndx] * curvature_[0][ndx], 0.0);
-            if (tmp > 0.0){
-            	forcebedx = mu_bed * g[2][ndx] * h[ndx] * unitvx;
-            	forcebedx_curv = unitvx * mu_bed * VxVy[0] * hVx[ndx] * curvature_[0][ndx];
-            }
-
-
-            // The resisting forces due to flow thickness gradient in x direction
-			if (effect_viscous > tiny){
-			D_xy = (0.5 * (dVx_dy + dVy_dx));
-            		D_xx = dVx_dx;
-			forceintx = 1.5 * effect_viscous * sqrt(h[ndx]) * ( D_xx * dh_dx[ndx] + D_xy * dh_dy[ndx] ) * scale_.epsilon;
-			}
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            // y direction source terms
-            //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-            // the transient force in the y direction
-            forcetransy = (hVy[ndx] - prev_state_vars_[2][ndx]) / dt;
-
-            // the convective in y direction
-            forceconvecty = (fluxxp[2] - fluxxm[2]) / dx_[0][ndx] + (fluxyp[2] - fluxym[2]) / dx_[1][ndx];
-
-			// The gravity force in the y direction
-			forcegravy = g[1][ndx] * h[ndx];
-
-			// Basal friction force in y direction (with curvature)
-            tmp = c_dmax1(g[2][ndx] * h[ndx] + VxVy[1] * hVy[ndx] * curvature_[1][ndx], 0.0);
-            if (tmp > 0.0) {
-            	forcebedy = mu_bed * g[2][ndx] * h[ndx] * unitvy;
-            	forcebedy_curv = mu_bed * VxVy[1] * hVy[ndx] * curvature_[1][ndx] * unitvy;
-            }
-            
-            // The resisting forces due to flow thickness gradient in y direction
-			if (effect_viscous > tiny) {
-			D_yy = dVy_dy;
-			forceinty = 1.5 * effect_viscous * sqrt(h[ndx]) * (D_yy * dh_dy[ndx] + D_xy * dh_dx[ndx]) * scale_.epsilon;
-			}
-			
-            /////////////////////////////////////////////////////////////////////////////
-            // Recording QoIs globally from updated cells at current time
-            m_force_transx += (forcetransx * dxdy);
-            m_force_transy += (forcetransy * dxdy);
-            m_force_conx += (forceconvectx * dxdy);
-            m_force_cony += (forceconvecty * dxdy);
-			m_force_gx += (forcegravx * dxdy);
-			m_force_gy += (forcegravy * dxdy);
-			m_force_bx -= (forcebedx * dxdy);
-			m_force_by -= (forcebedy * dxdy);
-			m_force_bcx -= (forcebedx_curv * dxdy);
-			m_force_bcy -= (forcebedy_curv * dxdy);
-			m_force_rx -= (forceintx * dxdy);
-			m_force_ry -= (forceinty * dxdy);
-
-			m_power_trans += (forcetransx * VxVy[0] + forcetransy * VxVy[1]) * dxdy;
-			m_power_con += (forceconvectx * VxVy[0] + forceconvecty * VxVy[1]) * dxdy;
-			m_power_g += (forcegravx * VxVy[0] + forcegravy * VxVy[1]) * dxdy;
-			m_power_b -= (forcebedx * VxVy[0] + forcebedy * VxVy[1]) * dxdy;
-			m_power_bc -= (forcebedx_curv * VxVy[0] + forcebedy_curv * VxVy[1]) * dxdy;
-			m_power_r -= (forceintx * VxVy[0] + forceinty * VxVy[1]) * dxdy;
-
-		    m_Fr += (Local_Fr * dxdy * h[ndx]);
-		    m_vol += dxdy * h[ndx];
-
-			// Searching user-defined locations to record QoIs
-			if (localquants_ptr->no_locations > 0)
-				localquants_ptr->FindElement(dt, dx_[0][ndx], dx_[1][ndx],
-						coord_[0][ndx], coord_[1][ndx], h[ndx], hVx[ndx],
-						hVy[ndx], forcetransx, forcetransy, forceconvectx,
-						forceconvecty, forcegravx, forcegravy, -forcebedx,
-						-forcebedy, -forcebedx_curv, -forcebedy_curv, -forceintx,
-						-forceinty, zeta_[0][ndx], zeta_[1][ndx], Local_Fr);
-		}
-	}
-
-    // Storing QoIs globally from updated cells at current time
-	force_transx = m_force_transx;
-	force_transy = m_force_transy;
-    force_conx = m_force_conx;
-	force_cony = m_force_cony;
-	force_gx = m_force_gx;
-	force_gy = m_force_gy;
-	force_bx = m_force_bx;
-	force_by = m_force_by;
-	force_bcx = m_force_bcx;
-	force_bcy = m_force_bcy;
-	force_rx = m_force_rx;
-	force_ry = m_force_ry;
-	power_trans = m_power_trans;
-	power_con = m_power_con;
-	power_g = m_power_g;
-	power_b = m_power_b;
-	power_bc = m_power_bc;
-	power_r = m_power_r;
-	Fr_ = m_Fr / m_vol;
-
-	// Recording time-integration of QoIs globally from updated cells
-	Tforce_transx += m_force_transx * dt;
-	Tforce_conx += m_force_conx * dt;
-	Tforce_gx += m_force_gx * dt;
-	Tforce_bx += m_force_bx * dt;
-	Tforce_bcx += m_force_bcx * dt;
-	Tforce_rx += m_force_rx * dt;
-	Tforce_transy += m_force_transy * dt;
-	Tforce_cony += m_force_cony * dt;
-	Tforce_gy += m_force_gy * dt;
-	Tforce_by += m_force_by * dt;
-	Tforce_bcy += m_force_bcy * dt;
-	Tforce_ry += m_force_ry * dt;
-	Tpower_trans += m_power_trans * dt;
-	Tpower_con += m_power_con * dt;
-	Tpower_g += m_power_g * dt;
-	Tpower_b += m_power_b * dt;
-	Tpower_bc += m_power_bc * dt;
-	Tpower_r += m_power_r * dt;
-
-	// Storing recorded specified QoIs at user-defined locations
-    if (localquants_ptr->no_locations > 0)
-     	localquants_ptr->StoreQuant(matprops_ptr, timeprops_ptr);
-}
-void Integrator_SinglePhase_mu_I::h5write(H5::CommonFG *parent, string group_name) const
-{
-    Integrator_SinglePhase::h5write(parent, group_name);
-    H5::Group group(parent->openGroup(group_name));
-    TiH5_writeStringAttribute__(group, "Integrator_SinglePhase_mu_I","Type");
-    TiH5_writeDoubleAttribute(group, mu_s);
-    TiH5_writeDoubleAttribute(group, mu_2);
-    TiH5_writeDoubleAttribute(group, L_material);
-    TiH5_writeDoubleAttribute(group, d);
-    TiH5_writeDoubleAttribute(group, Beta);
-}
-void Integrator_SinglePhase_mu_I::h5read(const H5::CommonFG *parent, const  string group_name)
-{
-    Integrator_SinglePhase::h5read(parent,group_name);
-    H5::Group group(parent->openGroup(group_name));
-    TiH5_readDoubleAttribute(group, mu_s);
-    TiH5_readDoubleAttribute(group, mu_2);
-    TiH5_readDoubleAttribute(group, L_material);
-    TiH5_readDoubleAttribute(group, d);
-    TiH5_readDoubleAttribute(group, Beta);
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////
-Integrator_TwoPhases_mu_I::Integrator_TwoPhases_mu_I(cxxTitanSimulation *_titanSimulation):
-        Integrator_TwoPhases(_titanSimulation)
-{
-    assert(elementType==ElementType::TwoPhases);
-    assert(order==1);
-    
-    mu_s = 0.5;
-    mu_2 = 0.7;
-    d = 0.1;
-    L_material = 0.25;
-    Beta = 0.6;
-    alpha = 0.7;
-}
-bool Integrator_TwoPhases_mu_I::scale()
-{
-    if(Integrator_TwoPhases::scale())
-    {
-        //anything to scale?
-        return true;
-    }
-    return false;
-}
-bool Integrator_TwoPhases_mu_I::unscale()
-{
-    if(Integrator_TwoPhases::unscale())
-    {
-        //anything to unscale?
-        return true;
-    }
-    return false;
-}
-void Integrator_TwoPhases_mu_I::print0(int spaces)
-{
-    printf("%*cIntegrator: Two Phases mu-I model, first order\n", spaces,' ');
-    Integrator_TwoPhases::print0(spaces+4);
-}
-void Integrator_TwoPhases_mu_I::predictor()
-{
-
-}
-void Integrator_TwoPhases_mu_I::corrector()
-{
-    MatPropsTwoPhases* matprops2_ptr=static_cast<MatPropsTwoPhases*>(matprops_ptr);
-
-    double den_solid = matprops2_ptr->den_solid;
-    double den_fluid = matprops2_ptr->den_fluid;
-    double terminal_vel = matprops2_ptr->v_terminal;
-    //double alpha = 0.0;
-
-    //for comparison of magnitudes of forces in slumping piles
-    double m_forceint = 0.0;
-    double m_forcebed = 0.0;
-    double m_eroded = 0.0;
-    double m_deposited = 0.0;
-    double m_realvolume = 0.0;
-    double m_realvolume_fluid = 0.0;
-    double m_entrain_in = 0.0;
-    double m_entrain_out = 0.0;
-
-
-    //intfrictang=matprops_ptr->intfrict;
-    //frict_tiny=matprops_ptr->frict_tiny;
-    //double sin_intfrictang=sin(int_frict);
-    double epsilon=scale_.epsilon;
-
-    //convinience ref
-    //tivector<double> *g=gravity_;
-    //tivector<double> *dgdx=d_gravity_;
-    //tivector<double> &kactxy=effect_kactxy_[0];
-    //tivector<double> &bedfrictang=effect_bedfrict_;
-
-    // mdj 2007-04 this loop has pretty much defeated me - there is
-    //             a dependency in the Element class that causes incorrect
-    //             results
-    #pragma omp parallel for schedule(dynamic,TITAN2D_DINAMIC_CHUNK) \
-        reduction(+: m_forceint, m_forcebed, m_eroded, m_deposited, m_realvolume, m_realvolume_fluid, m_entrain_in, m_entrain_out)
-    for(ti_ndx_t ndx = 0; ndx < elements_.size(); ndx++)
-    {
-        if(adapted_[ndx] <= 0)continue;//if this element does not belong on this processor don't involve!!!
-        //if first order states was not updated as there is no predictor
-        if(order==1)
-        {
-            for (int i = 0; i < NUM_STATE_VARS; i++)
-                prev_state_vars_[i][ndx]=state_vars_[i][ndx];
-        }
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        double elem_forceint;
-        double elem_forcebed;
-        double elem_eroded;
-        double elem_deposited;
-        double elem_eroded_fluid = 0.0;
-
-        double dxdy = dx_[0][ndx] * dx_[1][ndx];
-        double dtdx = dt / dx_[0][ndx];
-        double dtdy = dt / dx_[1][ndx];
-
-        int xp = positive_x_side_[ndx];
-        int yp = (xp + 1) % 4;
-        int xm = (xp + 2) % 4;
-        int ym = (xp + 3) % 4;
-
-        int ivar, j, k;
-
-        double fluxxp[NUM_STATE_VARS], fluxyp[NUM_STATE_VARS];
-        double fluxxm[NUM_STATE_VARS], fluxym[NUM_STATE_VARS];
-
-
-        ti_ndx_t nxp = node_key_ndx_[xp + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxxp[ivar] = node_flux_[ivar][nxp];
-
-        ti_ndx_t nyp = node_key_ndx_[yp + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxyp[ivar] = node_flux_[ivar][nyp];
-
-        ti_ndx_t nxm = node_key_ndx_[xm + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxxm[ivar] = node_flux_[ivar][nxm];
-
-        ti_ndx_t nym = node_key_ndx_[ym + 4][ndx];
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            fluxym[ivar] = node_flux_[ivar][nym];
-
-
-        /* the values being passed to correct are for a SINGLE element, NOT a
-         region, as such the only change that having variable bedfriction
-         requires is to pass the bedfriction angle for the current element
-         rather than the only bedfriction
-         I wonder if this is legacy code, it seems odd that it is only called
-         for the SUN Operating System zee ../geoflow/correct.f */
-
-//#ifdef STOPPED_FLOWS
-    //#ifdef STOPCRIT_CHANGE_SOURCE
-        //int IF_STOPPED=stoppedflags_[ndx];
-    //#else
-        //int IF_STOPPED = !(!stoppedflags_[ndx]);
-    //#endif
-//#endif
-        double g[3]{gravity_[0][ndx],gravity_[1][ndx],gravity_[2][ndx]};
-        double d_g[3]{d_gravity_[0][ndx],d_gravity_[1][ndx],d_gravity_[2][ndx]};
-
-
-        int i;
-        double kactxy[DIMENSION];
-        double bedfrict = effect_bedfrict_[ndx];
-        double Vfluid[DIMENSION];
-        double volf;
-
-
-        if(h[ndx] > GEOFLOW_TINY)
-        {
-            for(i = 0; i < DIMENSION; i++)
-                kactxy[i] = effect_kactxy_[i][ndx];
-
-            // fluid velocities
-            double hfluid = h[ndx] - h_liq[ndx];
-            if (hfluid > GEOFLOW_TINY) {
-                Vfluid[0] = hVx_liq[ndx] / hfluid;
-                Vfluid[1] = hVy_liq[ndx] / hfluid;
-            } else {
-                Vfluid[0] = 0.0;
-                Vfluid[1] = 0.0;
-            }
-
-            // volume fractions
-            volf = h_liq[ndx] / h[ndx];
-            if (volf > 1.0 - GEOFLOW_TINY) volf = 1.0;
-        }
-        else
-        {
-            for(i = 0; i < DIMENSION; i++)
-            {
-                kactxy[i] = matprops2_ptr->scale.epsilon;
-                Vfluid[i] = 0.;
-            }
-            volf = 1.;
-            bedfrict = matprops2_ptr->bedfrict[material_[ndx]];
-        }
-
-        double Vsolid[DIMENSION];
-        if(h_liq[ndx] > GEOFLOW_TINY)
-        {
-            Vsolid[0] = hVx_sol[ndx] / h_liq[ndx];
-            Vsolid[1] = hVy_sol[ndx] / h_liq[ndx];
-        }
-        else
-        {
-            Vsolid[0] = Vsolid[1] = 0.0;
-        }
-
-        double V_avg[DIMENSION];
-        V_avg[0] = Vsolid[0] * volf + Vfluid[0] * (1. - volf);
-        V_avg[1] = Vsolid[1] * volf + Vfluid[1] * (1. - volf);
-        elements_[ndx].convect_dryline(V_avg[0],V_avg[1], dt); //this is necessary
-
-        double curv_x=curvature_[0][ndx];
-        double curv_y=curvature_[1][ndx];
-        double xslope=zeta_[0][ndx];
-        double yslope=zeta_[1][ndx];
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        //corrector
-        double speed;
-        double forceintx, forceinty;
-        double forcebedx, forcebedy;
-        double forcebedmax, forcebedequil, forcegrav;
-        double unitvx, unitvy;
-        double den_frac;
-        double alphaxx, alphayy, alphaxy, alphaxz, alphayz, alphax, alphay;
-        double tanbed;
-
-        double Ustore[6];
-        double h_inv, hphi_inv;
-        double sgn_dudy, sgn_dvdx, sgn_dudx, sgn_dvdy, tmp, tmpx, tmpy;
-        double mu_bed, effect_viscous, D_xx, D_xy, D_yy, mu, Local_Fr, A;
-        double unit_dVxdx, unit_dVxdy, unit_dVydx, unit_dVydy, unit_dVxdVy;
-        double slope;
-        double t1, t2, t3, t4, t5;
-        double es, totalShear;
-        double drag[4];
-
-        // initialize to zero
-        forceintx = 0.0;
-        forcebedx = 0.0;
-        forceinty = 0.0;
-        forcebedy = 0.0;
-        unitvx = 0.0;
-        unitvy = 0.0;
-        elem_eroded = 0.0;
-        mu_bed = 0.0;
-        mu = 0.0;
-        unit_dVxdx = 0.0;
-        unit_dVxdy = 0.0;
-        unit_dVydx = 0.0;
-        unit_dVydy = 0.0;
-        unit_dVxdVy = 0.0;
-
-        slope = sqrt(xslope * xslope + yslope * yslope);
-        den_frac = den_fluid / den_solid;
-        for (i = 0; i < 6; ++i)
-            Ustore[i] = prev_state_vars_[i][ndx] + dt * Influx_[i][ndx]
-                    - dtdx * (fluxxp[i] - fluxxm[i])
-                    - dtdy * (fluxyp[i] - fluxym[i]);
-
-        if (Ustore[0] > tiny)
-        {
-            // Source terms ...
-            // here speed is speed squared
-            speed = Vsolid[0] * Vsolid[0] + Vsolid[1] * Vsolid[1];
-            if (speed > 0.0)
-            {
-                // here speed is speed
-                speed = sqrt(speed);
-                unitvx = Vsolid[0] / speed;
-                unitvy = Vsolid[1] / speed;
-            }
-            else
-            {
-                unitvx = 0.0;
-                unitvy = 0.0;
-            }
-            // Calculation of Froude number
-            Local_Fr = (h_liq[ndx] > tiny) ? speed / sqrt( g[2] * h_liq[ndx] * epsilon) : 0.0;
-            
-            //ccccccccccccccc Calculation of mu_bed(Local_Fr,h) ccccccccccccccccc
-
-            //Dynamic flow regime
-            double denom = (L_material * Local_Fr) + (h_liq[ndx] * Beta);
-            mu_bed = (denom > GEOFLOW_TINY) ? mu_s + ( mu_2 - mu_s ) * (L_material * Local_Fr) / denom : mu_s;
-            
-            tanbed = tan(bedfrict);
-            h_inv = (h[ndx] > tiny) ? 1.0 / c_dmax1(h[ndx], 1e-3) : 0.0;
-            hphi_inv = (h_liq[ndx] > tiny) ? 1.0 / c_dmax1(h_liq[ndx], 1e-3) : 0.0;
-            alphaxx = 1.0; //kactxy[0];
-            alphayy = 1.0; //kactxy[0];
-            den_frac = den_fluid / den_solid;
-            calc_drag_force(ndx, Vsolid, Vfluid, den_solid, den_fluid, terminal_vel, drag);
-            
-            double dVx_sol_dx = hphi_inv * (dhVx_sol_dx[ndx] - Vsolid[0] * dh_liq_dx[ndx]);
-            double dVy_sol_dy = hphi_inv * (dhVy_sol_dy[ndx] - Vsolid[1] * dh_liq_dy[ndx]);
-            double dVx_sol_dy = hphi_inv * (dhVx_sol_dy[ndx] - Vsolid[0] * dh_liq_dy[ndx]);
-            double dVy_sol_dx = hphi_inv * (dhVy_sol_dx[ndx] - Vsolid[1] * dh_liq_dx[ndx]);
-            
-            // Cap velocity gradients to prevent numerical explosions near dry fronts
-            dVx_sol_dx = c_dmin1(c_dmax1(dVx_sol_dx, -100.0), 100.0);
-            dVy_sol_dy = c_dmin1(c_dmax1(dVy_sol_dy, -100.0), 100.0);
-            dVx_sol_dy = c_dmin1(c_dmax1(dVx_sol_dy, -100.0), 100.0);
-            dVy_sol_dx = c_dmin1(c_dmax1(dVy_sol_dx, -100.0), 100.0);
-            
-            if (dVx_sol_dx > 0.0 && dVy_sol_dy > 0.0 && dVx_sol_dy > 0.0 && dVy_sol_dx > 0.0)
-            {
-            	unit_dVxdx = dVx_sol_dx / sqrt(dVx_sol_dx);
-            	unit_dVxdy = dVx_sol_dy / sqrt(dVx_sol_dy);
-            	unit_dVydx = dVy_sol_dx / sqrt(dVy_sol_dx);
-            	unit_dVydy = dVy_sol_dy / sqrt(dVy_sol_dy);
-            	unit_dVxdVy = (dVx_sol_dy + dVy_sol_dx) / sqrt(dVx_sol_dy + dVy_sol_dx);
-            }
-            else
-            {
-            	unit_dVxdx = 0.0;
-            	unit_dVxdy = 0.0;
-            	unit_dVydx = 0.0;
-            	unit_dVydy = 0.0;
-            	unit_dVxdVy = 0.0;
-            }
-            
-            double entrainment_rate = 0.0;
-            if (volf < 1.0 - GEOFLOW_TINY) {
-                entrainment_rate = alpha * h[ndx] * (dVx_sol_dx + dVy_sol_dy);
-            }
-            
-            double actual_fluid_source = (1.0 - volf) * entrainment_rate;
-            Ustore[0] = Ustore[0] + dt * actual_fluid_source;
-            elem_eroded_fluid = dt * actual_fluid_source;  // signed: +in, -out
-            // Store local signed rate (m/s) for per-element XDMF visualization
-            Influx_[5][ndx] = actual_fluid_source;
-
-            double mu = g[0] / g[2];
-            
-            double effect_viscous = 0.0;
-            if (mu > mu_s + tiny)
-            {
-                effect_viscous = (2 * L_material * g[0] * c_dmax1(mu_2 - mu, 0.0)) / (9 * Beta * sqrt(g[2]) * (mu - mu_s));
-            }
-
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            //    solid fraction x-direction source terms
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            //    alphaxy -- see pitman-le (2005)
-            tmp = hphi_inv * (dhVx_sol_dy[ndx] - Vsolid[0] * dh_liq_dy[ndx]);
-            //tmpx = dVx_sol_dy + dVy_sol_dx;
-            D_xx = dVx_sol_dx;
-            D_xy = 0.5 * (dVx_sol_dy + dVy_sol_dx);
-            alphax = 1.5 * effect_viscous * sqrt(h_liq[ndx]) * ( D_xx * dh_liq_dx[ndx] + D_xy * dh_liq_dy[ndx] ) * epsilon; //sgn_dudy * sin_intfrictang * kactxy[0];
-
-            //    alphaxz (includes centrifugal effects)
-            alphaxz = -unitvx * mu_bed
-                    * (1.0 + (Vsolid[0] * Vsolid[0]) * curv_x / g[2]);
-
-            //    evaluate t1
-            t1 = (alphaxz)
-                 * h_liq[ndx] * g[2];
-            //    evaluate t2
-            t2 = 0.0;
-            //    evaluate t3
-            t3 = 0.0;
-            //    evaluate t4
-            t4 = h_liq[ndx] * g[0] - alphax;
-            //    evaluate drag
-            t5 = 0.0;
-            
-            //    update Ustore with Coulomb stopping criteria
-            double inertial_x = fabs(Ustore[2] + dt * (t4 + t5)); // Momentum + Driving forces
-            double drag_x = fabs(dt * t1); // Friction force
-
-            if (inertial_x <= drag_x) {
-                Ustore[2] = 0.0;
-            } else {
-                Ustore[2] = Ustore[2] + dt * (t1 - t2 - t3 + t4 + t5);
-            }
-
-            //ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            // solid fraction y-direction source terms
-            //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            //    alphaxy -- see pitman-le (2005) for definitions
-            tmp = hphi_inv * (dhVy_sol_dx[ndx] - Vsolid[1] * dh_liq_dx[ndx]);
-            //tmpy = dVy_sol_dx + dVx_sol_dy;
-            sgn_dvdx = sgn_tiny(tmpy, frict_tiny);
-            D_yy = dVy_sol_dy;
-            alphay = 1.5 * effect_viscous * sqrt(h_liq[ndx]) * ( D_xy * dh_liq_dx[ndx] + D_yy * dh_liq_dy[ndx] ) * epsilon; //sgn_dvdx * sin_intfrictang * kactxy[0];
-
-            //    alphayz
-            alphayz = -unitvy * mu_bed
-                    * (1.0 + (Vsolid[1] * Vsolid[1]) * curv_y / g[2]);
-
-            //    evaluate t1
-            t1 = (alphayz)
-                 * h_liq[ndx] * g[2];
-            //    evaluate t2
-            t2 = 0.0; //epsilon * den_frac * h_liq[ndx] * dh_dy[ndx];
-            //    evaluate t3
-            t3 = 0.0; //epsilon * den_frac * h_liq[ndx] * g[2] * yslope;
-            //    evaluate t4 ( gravity along y-dir )
-            t4 = h_liq[ndx] * g[1] - alphay;
-            //    drag term
-            t5 = drag[1];
-            
-            double inertial_y = fabs(Ustore[3] + dt * (t4 + t5)); // Momentum + Driving forces
-            double drag_y = fabs(dt * t1); // Friction force
-
-            if (inertial_y <= drag_y) {
-                Ustore[3] = 0.0;
-            } else {
-                Ustore[3] = Ustore[3] + dt * (t1 - t2 - t3 + t4 + t5);
-            }    
-
-            //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            //    fluid fraction x-direction source terms
-            //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            double fluid_entrain_mom_x = (actual_fluid_source < 0.0) ? actual_fluid_source * Vfluid[0] : 0.0;
-            t4 = (1 - volf) * h[ndx] * g[0] + fluid_entrain_mom_x;
-            //    drag force on fluid
-            t5 = drag[2];
-            
-            // Prevent stiff drag from over-correcting fluid velocity (implicit-like cap)
-            double h_fluid_drag = h[ndx] - h_liq[ndx];
-            if (h_fluid_drag > GEOFLOW_TINY) {
-                double target_mom = h_fluid_drag * Vsolid[0];
-                double current_mom = Ustore[4] + dt * t4;
-                if (t5 > 0.0) {
-                    double max_t5 = c_dmax1(0.0, (current_mom - target_mom) / dt);
-                    t5 = c_dmin1(t5, max_t5);
-                } else if (t5 < 0.0) {
-                    double min_t5 = c_dmin1(0.0, (current_mom - target_mom) / dt);
-                    t5 = c_dmax1(t5, min_t5);
-                }
-            } else {
-                t5 = 0.0;
-            }
-            
-            Ustore[4] = Ustore[4] + dt * (t4 - t5);
-
-            //    fluid fraction y-direction source terms
-            //cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-            double fluid_entrain_mom_y = (actual_fluid_source < 0.0) ? actual_fluid_source * Vfluid[1] : 0.0;
-            t4 = (1 - volf) * h[ndx] * g[1] + fluid_entrain_mom_y;
-            //    drag force on fluid
-            t5 = drag[3];
-            
-            if (h_fluid_drag > GEOFLOW_TINY) {
-                double target_mom_y = h_fluid_drag * Vsolid[1];
-                double current_mom_y = Ustore[5] + dt * t4;
-                if (t5 > 0.0) {
-                    double max_t5 = c_dmax1(0.0, (current_mom_y - target_mom_y) / dt);
-                    t5 = c_dmin1(t5, max_t5);
-                } else if (t5 < 0.0) {
-                    double min_t5 = c_dmin1(0.0, (current_mom_y - target_mom_y) / dt);
-                    t5 = c_dmax1(t5, min_t5);
-                }
-            } else {
-                t5 = 0.0;
-            }
-            
-            Ustore[5] = Ustore[5] + dt * (t4 - t5);
-            
-        }
-
-        // computation of magnitude of friction forces for statistics
-        elem_forceint = unitvx * forceintx + unitvy * forceinty;
-        elem_forcebed = unitvx * forcebedx + unitvy * forcebedy;
-
-        // clamp thickness to avoid NaNs in source terms and unphysical negative heights
-        Ustore[0] = c_dmax1(Ustore[0], 0.0);
-        Ustore[1] = c_dmax1(Ustore[1], 0.0);
-        Ustore[1] = c_dmin1(Ustore[0], Ustore[1]);
-
-        if (Ustore[0] <= GEOFLOW_TINY)
-        {
-            Ustore[2] = 0.0; Ustore[3] = 0.0;
-            Ustore[4] = 0.0; Ustore[5] = 0.0;
-        }
-        else
-        { 
-            if (Ustore[1] <= GEOFLOW_TINY)
-            {
-                Ustore[2] = 0.0; Ustore[3] = 0.0;
-            }
-            if (Ustore[0] - Ustore[1] <= GEOFLOW_TINY)
-            {
-                //Ustore[1] = Ustore[0]; // Snap solid height to total height
-                Ustore[4] = 0.0; Ustore[5] = 0.0;
-            }
-        }
-        
-         
-        // update the state variables
-        for (i = 0; i < 6; ++i)
-            state_vars_[i][ndx]=Ustore[i];
-
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        elem_forceint *= dxdy;
-        elem_forcebed *= dxdy;
-        elem_eroded *= dxdy;
-        elem_eroded_fluid *= dxdy;
-
-
-        if(stoppedflags_[ndx] == 2)
-            elem_deposited = h[ndx] * dxdy;
-        else
-            elem_deposited = 0.0;
-
-        if(stoppedflags_[ndx]) {
-            elem_eroded = 0.0;
-            elem_eroded_fluid = 0.0;
-        }
-
-        elements_[ndx].calc_shortspeed(1.0 / dt);
-
-
-        //correct(elementType, NodeTable, ElemTable, dt, matprops_ptr, fluxprops_ptr, timeprops_ptr, this, Curr_El_out, &elemforceint,
-        //        &elemforcebed, &elemeroded, &elemdeposited);
-        ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-        m_forceint += fabs(elem_forceint);
-        m_forcebed += fabs(elem_forcebed);
-        m_realvolume += dxdy * h[ndx];
-        m_realvolume_fluid += dxdy * state_vars_[1][ndx];
-        m_eroded += elem_eroded;
-        if (elem_eroded_fluid > 0.0) m_entrain_in  += elem_eroded_fluid;
-        else                            m_entrain_out += elem_eroded_fluid;
-        m_deposited += elem_deposited;
-
-        // apply bc's
-        for(int j = 0; j < 4; j++)
-            if(neigh_proc_[j][ndx] == INIT)   // this is a boundary!
-                for(int k = 0; k < NUM_STATE_VARS; k++)
-                    state_vars_[k][ndx]=0.0;
-    }
-    forceint = m_forceint;
-    forcebed = m_forcebed;
-    eroded = m_eroded;
-    eroded_fluid = m_entrain_in + m_entrain_out;  // net signed entrainment
-    entrain_in = m_entrain_in;
-    entrain_out = m_entrain_out;
-    deposited = m_deposited;
-    realvolume = m_realvolume;
-    realvolume_fluid = m_realvolume_fluid;
-}
-void Integrator_TwoPhases_mu_I::flowrecords()
-{
-
-}
-void Integrator_TwoPhases_mu_I::h5write(H5::CommonFG *parent, string group_name) const
-{
-    Integrator_TwoPhases::h5write(parent,group_name);
-    H5::Group group(parent->openGroup(group_name));
-    TiH5_writeStringAttribute__(group,"Integrator_TwoPhases_mu_I","Type");
-    TiH5_writeDoubleAttribute(group, mu_s);
-    TiH5_writeDoubleAttribute(group, mu_2);
-    TiH5_writeDoubleAttribute(group, d);
-    TiH5_writeDoubleAttribute(group, L_material);
-    TiH5_writeDoubleAttribute(group, Beta);
-    TiH5_writeDoubleAttribute(group, alpha);
-}
-void Integrator_TwoPhases_mu_I::h5read(const H5::CommonFG *parent, const  string group_name)
-{
-    Integrator_TwoPhases::h5read(parent,group_name);
-    H5::Group group(parent->openGroup(group_name));
-    TiH5_readDoubleAttribute(group, mu_s);
-    TiH5_readDoubleAttribute(group, mu_2);
-    TiH5_readDoubleAttribute(group, d);
-    TiH5_readDoubleAttribute(group, L_material);
-    TiH5_readDoubleAttribute(group, Beta);
-    TiH5_readDoubleAttribute(group, alpha);
-}
 
 
 /***********************************************************************/

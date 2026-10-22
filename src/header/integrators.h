@@ -116,12 +116,6 @@ protected:
     double eroded;
     double deposited;
     double realvolume;
-    
-    double eroded_fluid;
-    double entrain_in;
-    double entrain_out;
-    double deposited_fluid;
-    double realvolume_fluid;
 
     double force_transx;
     double force_transy;
@@ -518,7 +512,6 @@ protected:
     tivector<double> &dhVx_liq_dy;
     tivector<double> &dhVy_liq_dx;
     tivector<double> &dhVy_liq_dy;
-
 protected:
     void gmfggetcoef2ph(const double h_liq,const double hVx_sol,const double hVy_sol,
             const double dh_dx_liq,const double dhVx_dx_sol,
@@ -577,11 +570,11 @@ protected:
             }
 
             if (flowtype == 1)
-                sound_speed = sqrt(c_dmax1(0.0, h_sol * kactx * gravity_z));
+                sound_speed = sqrt(h_sol * kactx * gravity_z);
             else if (flowtype == 2)
-                sound_speed = sqrt(c_dmax1(0.0, h_sol * gravity_z));
+                sound_speed = sqrt(h_sol * gravity_z);
             else
-                sound_speed = sqrt(c_dmax1(0.0, h_liq * gravity_z * kactx+(h_sol - h_liq) * gravity_z));
+                sound_speed = sqrt(h_liq * gravity_z * kactx+(h_sol - h_liq) * gravity_z);
 
             //x-direction
             eigenvxmax = c_dmax1(fabs(v_solid[0] + sound_speed), fabs(v_fluid[0] + sound_speed));
@@ -637,20 +630,8 @@ protected:
         //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         //!     model in pitman-le paper
         //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        if (h[ndx] > tiny) {
-            volf = h_liq[ndx] / h[ndx];
-            if (volf > 1.0 - tiny) volf = 1.0;
-        } else {
-            volf = 1.0;
-        }
-
-        // Prevent division by zero when volf is 1.0 (exponant is 3.0)
-        double fluid_frac = 1.0 - volf;
-        if (fluid_frac < tiny) {
-            fluid_frac = tiny;
-        }
-
-        temp = h_liq[ndx] * pow(fluid_frac, 1.0 - exponant) / vterminal;
+        volf = h_liq[ndx] / h[ndx];
+        temp = h_liq[ndx] * pow(1. - volf, 1.0 - exponant) / vterminal;
         denfrac = den_fluid / den_solid;
 
         for (int i = 0; i < 4; ++i)
@@ -670,180 +651,4 @@ protected:
         }
     }
 };
-
-class Integrator_SinglePhase_mu_I:public Integrator_SinglePhase
-{
-public:
-    Integrator_SinglePhase_mu_I(cxxTitanSimulation *_titanSimulation);
-
-    virtual bool scale();
-    virtual bool unscale();
-    virtual void print0(int spaces=0);
-    //! Dump object content to hdf5 file
-    virtual void h5write(H5::CommonFG *parent, string group_name="Integrator") const;
-    //! Load object content from hdf5 file
-    virtual void h5read(const H5::CommonFG *parent, const  string group_name="Integrator");
-    
-    //int stopping_criteria;
-    
-protected:
-    /**
-     * Predictor step for second order of nothing for first order
-     */
-    virtual void predictor();
-    /**
-     * Corrector step for second order of whole step for first order
-     */
-    virtual void corrector();
-
-    // This method is used when we need to get the records of flow characteristics such as forces.
-    virtual void flowrecords();
-
-    //! this function computes k active/passive (which is necessary because of the use of the Coulomb friction model)
-    //! calculates the wave speeds (eigen values of the flux jacobians) and based on them determines the maximum
-    //! allowable timestep for this iteration.
-    virtual double get_coef_and_eigen(int ghost_flag);
-
-public:
-    double mu_s;
-    double mu_2;
-    double d;
-    double I_0;
-    double phi;
-    double Beta;
-    double L_material;
-
-protected:
-    //! calculation of k active passive
-    virtual void gmfggetcoef_muI(double &Kactx, double &Kacty,const double epsilon)
-    {
-        Kactx = 1.0;
-        Kacty = 1.0;
-
-        Kactx = epsilon * Kactx;
-        Kacty = epsilon * Kacty;
-    }
-    //! calculation of wave speeds (eigen vectors of the flux jacoboians)
-    void eigen_muI( const double h, double &eigenvxmax, double &eigenvymax, double &evalue,
-            const double tiny, double &kactx, const double gravity_z, const double *VxVy)
-    {
-        if (h > tiny)
-        {
-            eigenvxmax = fabs(VxVy[0]) + sqrt(kactx * gravity_z * h);
-            eigenvymax = fabs(VxVy[1]) + sqrt(kactx * gravity_z * h);
-
-        }
-        else
-        {
-            eigenvxmax = tiny;
-            eigenvymax = tiny;
-        }
-
-        evalue = c_dmax1(eigenvxmax, eigenvymax);
-    }
-};
-/**
- * @class Integrator_TwoPhases_mu_I
- * @brief Integrator for two-phase flows using the mu(I) rheology.
- */
-class Integrator_TwoPhases_mu_I:public Integrator_TwoPhases
-{
-public:
-    Integrator_TwoPhases_mu_I(cxxTitanSimulation *_titanSimulation);
-
-    virtual bool scale();
-    virtual bool unscale();
-    virtual void print0(int spaces=0);
-
-    //! Dump object content to an HDF5 file
-    virtual void h5write(H5::CommonFG *parent, std::string group_name="Integrator") const;
-    //! Load object content from an HDF5 file
-    virtual void h5read(const H5::CommonFG *parent, const std::string group_name="Integrator");
-
-protected:
-    /**
-     * @brief Predictor step (unused in first-order scheme).
-     */
-    virtual void predictor();
-    /**
-     * @brief Corrector step where the main physics calculations occur.
-     */
-    virtual void corrector();
-
-    /**
-     * @brief Records flow characteristics like forces (unused).
-     */
-    virtual void flowrecords();
-    
-    virtual double get_coef_and_eigen(int ghost_flag);
-
-    // --- Member variables specific to the mu(I) rheology ---
-public:
-
-    double mu_s; // Static friction coefficient
-    double mu_2; // Second friction coefficient
-    double I_0;  // Material parameter for inertial number
-    double d;    // Mean particle diameter
-    double phi;  // Solid volume fraction at jamming
-    //double threshold; // Erosion threshold
-    double alpha; // Erosion rate
-    //int do_erosion; // Erosion model flag
-    double Beta; // mu(I) parameter
-    double L_material; // mu(I) parameter
-    
-    //! calculation of k active passive
-    virtual void gmfggetcoef2ph_muI(double &Kactx, double &Kacty,const double epsilon)
-    {
-        Kactx = 1.0;
-        Kacty = 1.0;
-
-        Kactx = epsilon * Kactx;
-        Kacty = epsilon * Kacty;
-    }
-
-private:
-    /**
-     * @brief Calculates the drag force between the solid and fluid phases.
-     * @note This implementation is taken directly from the Pitman & Le (2005) model.
-     */
-    void calc_drag_force(const ti_ndx_t ndx, const double *vsolid, const double *vfluid,
-                         const double den_solid, const double den_fluid, const double vterminal,
-                         double *drag)
-    {
-        double temp, volf, denfrac;
-        double delv[2];
-        const double exponant = 3.0;
-
-        if (h[ndx] > tiny) {
-            volf = h_liq[ndx] / h[ndx];
-            if (volf > 1.0 - tiny) volf = 1.0;
-        } else {
-            volf = 1.0;
-        }
-        
-        // Prevent division by zero when volf is 1.0 (exponant is 3.0)
-        double fluid_frac = 1.0 - volf;
-        if (fluid_frac < tiny) {
-            fluid_frac = tiny;
-        }
-        
-        temp = h_liq[ndx] * pow(fluid_frac, 1.0 - exponant) / vterminal;
-        denfrac = den_fluid / den_solid;
-
-        for (int i = 0; i < 4; ++i)
-            drag[i] = 0.0;
-
-        if (h_liq[ndx] > tiny)
-        {
-            for (int i = 0; i < 2; ++i)
-                delv[i] = vfluid[i] - vsolid[i];
-
-            drag[0] = 0.0; // x-drag on solid
-            drag[1] = 0.0; // y-drag on solid
-            drag[2] = temp * delv[0] / denfrac; // x-drag on fluid
-            drag[3] = temp * delv[1] / denfrac; // y-drag on fluid
-        }
-    }
-};
-
 #endif

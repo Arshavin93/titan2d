@@ -299,7 +299,6 @@ double PileProps::get_elliptical_pile_height(NodeHashTable* HT_Node_Ptr, Element
             height = (height >= 0.0) ? height : 0.0;
 
             sum_node_pile_height[inode] += height;
-
             sum_node_xmom[inode] += height * (initialVx[ipile]);
             sum_node_ymom[inode] += height * (initialVy[ipile]);
 
@@ -462,18 +461,7 @@ void PilePropsTwoPhases::set_element_height_to_elliptical_pile_height(NodeHashTa
         if(vol_fract[ipile] > vfract)
         vfract = vol_fract[ipile];
     }
-    
-    // Distribute total momentum between solid and fluid phases
-    double solid_xmom = xmom * vfract;
-    double solid_ymom = ymom * vfract;
-    double fluid_xmom = xmom * (1.0 - vfract);
-    double fluid_ymom = ymom * (1.0 - vfract);
-
-    m_EmTemp->put_height_mom(pileheight, vfract, solid_xmom, solid_ymom);
-    m_EmTemp->state_vars(4, fluid_xmom);
-    m_EmTemp->state_vars(5, fluid_ymom);
-    m_EmTemp->prev_state_vars(4, fluid_xmom);
-    m_EmTemp->prev_state_vars(5, fluid_ymom);
+    m_EmTemp->put_height_mom(pileheight, vfract, xmom, ymom);
 }
 void PilePropsTwoPhases::h5write(H5::CommonFG *parent, string group_name) const
 {
@@ -505,7 +493,6 @@ void FluxProps::h5write(H5::CommonFG *parent, string group_name) const
     TiH5_writeDoubleVectorAttribute(group, sinrot, no_of_sources);
     TiH5_writeDoubleVectorAttribute(group, xVel, no_of_sources);
     TiH5_writeDoubleVectorAttribute(group, yVel, no_of_sources);
-    TiH5_writeDoubleVectorAttribute(group, vol_fract, no_of_sources);
 
     TiH5_writeDoubleAttribute(group, height_scale);
     TiH5_writeDoubleAttribute(group,  length_scale);
@@ -515,7 +502,8 @@ void FluxProps::h5write(H5::CommonFG *parent, string group_name) const
 }
 void FluxProps::h5read(const H5::CommonFG *parent, const  string group_name)
 {
-    H5::Group group(parent->openGroup(group_name));
+    H5::Group group(TiH5_openGroup(parent, group_name));
+
     TiH5_readIntAttribute(group, no_of_sources);
 
     TiH5_readDoubleVectorAttribute(group, influx, no_of_sources);
@@ -529,14 +517,6 @@ void FluxProps::h5read(const H5::CommonFG *parent, const  string group_name)
     TiH5_readDoubleVectorAttribute(group, sinrot, no_of_sources);
     TiH5_readDoubleVectorAttribute(group, xVel, no_of_sources);
     TiH5_readDoubleVectorAttribute(group, yVel, no_of_sources);
-    
-    // Read vol_fract if it exists, otherwise default to 1.0 (to support old hdf5 files)
-    try {
-        TiH5_readDoubleVectorAttribute(group, vol_fract, no_of_sources);
-    } catch (...) {
-        vol_fract.clear();
-        vol_fract.resize(no_of_sources, 1.0);
-    }
 
     TiH5_readDoubleAttribute(group, height_scale);
     TiH5_readDoubleAttribute(group,  length_scale);

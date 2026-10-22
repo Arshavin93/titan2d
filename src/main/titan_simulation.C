@@ -729,11 +729,7 @@ void cxxTitanSimulation::xmdfWrite(const char *xmdf_filename,const char *hf5_fil
     }
     else if(elementType==ElementType::TwoPhases)
     {
-        xmdfNScalarAttributes(xmdf,"state_vars_", hf5_filename, "/ElemTable/state_vars_",NUM_STATE_VARS, NumberOfElements, "Float",8, "Cell",ElementTypesVarNames);
-        xmdfScalarAttribute(xmdf,"h", hf5_filename, "/ElemTable/state_vars_h", NumberOfElements, "Float",8, "Cell");
-        xmdfScalarAttribute(xmdf,"h_liq", hf5_filename, "/ElemTable/state_vars_h_liq", NumberOfElements, "Float",8, "Cell");
-        xmdfVectorAttributeXY(xmdf,"hV_sol", hf5_filename, "/ElemTable/state_vars_hVx_sol", "/ElemTable/state_vars_hVy_sol", NumberOfElements, "Float",8, "Cell");
-        xmdfVectorAttributeXY(xmdf,"hV_liq", hf5_filename, "/ElemTable/state_vars_hVx_liq", "/ElemTable/state_vars_hVy_liq", NumberOfElements, "Float",8, "Cell");
+        xmdfNScalarAttributes(xmdf,"state_vars_", hf5_filename, "/ElemTable/state_vars_",EQUATIONS, NumberOfElements, "Float",8, "Cell",ElementTypesVarNames);
     }
     /*xmdfScalarAttribute(xmdf,"h", hf5_filename, "/ElemTable/state_vars_h", NumberOfElements, "Float",8, "Cell");
     xmdfScalarAttribute(xmdf,"hVx", hf5_filename, "/ElemTable/state_vars_hVx", NumberOfElements, "Float",8, "Cell");

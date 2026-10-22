@@ -1917,7 +1917,7 @@ double Element::calc_elem_edge_wetness_factor(int ineigh, double dt)
             VxVy[0] *= (1.0 + 2.0 * a / fabs(VxVy[0])) / dx(0);
         }
 
-        VxVy[1] = 0.0;
+        VxVy[1] = state_vars(3) / state_vars(1);
         if(VxVy[1] != 0.0)
         {
             a = sqrt(effect_kactxy(1) * gravity(2) * state_vars(1) + (state_vars(0) - state_vars(1)) * gravity(2));
@@ -1933,7 +1933,7 @@ double Element::calc_elem_edge_wetness_factor(int ineigh, double dt)
             VxVy[0] *= (1.0 + 2.0 * a / fabs(VxVy[0])) / dx(0);
         }
 
-        VxVy[1] = 0.0; //state_vars(2) / state_vars(0);
+        VxVy[1] = state_vars(2) / state_vars(0);
         if(VxVy[1] != 0.0)
         {
             a = sqrt(effect_kactxy(1) * gravity(2) * state_vars(0));
@@ -2160,8 +2160,8 @@ void Element::xdirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
             Vel[i] = 0.;
 
             // a^2 = k_ap*h*ph*g(3) + h*(1-phi)*g(3)
-            a=sqrt(c_dmax1(0.0, effect_kactxy(0)*gravity(2)*hfv[0][1]
-                    +(hfv[0][0]-hfv[0][1])*gravity(2)));
+            a=sqrt(effect_kactxy(0)*gravity(2)*hfv[0][1]
+                    +(hfv[0][0]-hfv[0][1])*gravity(2));
 
             //fluxes
             for (i=0; i<NUM_STATE_VARS; i++)
@@ -2186,27 +2186,12 @@ void Element::xdirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
                 for(i = 0; i < NUM_STATE_VARS; i++)
                     hfv[0][i] *= wetnessfactor;
             Vel[1] = Vel[3] = 0.; // not really, but don't need it here
-            if (hfv[0][1] > GEOFLOW_TINY) {
-                Vel[0] = hfv[0][2] / hfv[0][1];
-            } else {
-                Vel[0] = 0.0;
-            }
-            
-            double h_fluid = hfv[0][0];
-            if (dynamic_cast<Integrator_TwoPhases_mu_I*>(integrator) != nullptr) {
-                h_fluid = hfv[0][0] - hfv[0][1];
-            } else {
-                h_fluid = hfv[0][0];
-            }
-            
-            if (h_fluid > GEOFLOW_TINY) {
-                Vel[2] = hfv[0][4] / h_fluid;
-            } else {
-                Vel[2] = 0.0;
-            }
+            Vel[0] = hfv[0][2] / hfv[0][1];
+            Vel[2] = hfv[0][4] / hfv[0][0];
+
             // a^2 = k_ap*h*ph*g(3) + h*(1-phi)*g(3)
             double temp = effect_kactxy(0) * hfv[0][1] * gravity(2);
-            a = sqrt(c_dmax1(0.0, temp + (hfv[0][0] - hfv[0][1]) * gravity(2)));
+            a = sqrt(temp + (hfv[0][0] - hfv[0][1]) * gravity(2));
 
             // get du/dy
             double dudy = (d_state_vars(NUM_STATE_VARS + 2) - d_state_vars(NUM_STATE_VARS + 1) * Vel[0]) / state_vars(1);
@@ -2215,45 +2200,12 @@ void Element::xdirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
             if(hfv[0][0] > GEOFLOW_TINY)
                 volf = hfv[0][1] / hfv[0][0];
             //fluxes
-            if (dynamic_cast<Integrator_TwoPhases_mu_I*>(integrator) != nullptr) {
-                // Extract global state variables 
-                // state_vars(0) is total mass, state_vars(1) is solid mass
-                double h_total = hfv[0][0]; 
-                double h_solid = hfv[0][1];
-                double h_fluid = h_total - h_solid;
-                
-                // 0. Total Mass Equation
-                hfv[1][0] = h_solid * Vel[0] + h_fluid * Vel[2];
-                
-                // 1. Solid Mass Equation
-                hfv[0][1] = h_solid;                          
-                hfv[1][1] = h_solid * Vel[0];
-                
-                // 2. Solid Momentum Equation (x-direction)
-                hfv[0][2] = hfv[0][2];
-                hfv[1][2] = h_solid * Vel[0] * Vel[0] + 0.5 * epsilon * h_total * h_solid * gravity(2);
-                
-                // 3. Solid momentum Equation (y-direction)
-                hfv[0][3] = hfv[0][3];
-                hfv[1][3] = hfv[0][3] * Vel[0];
-                
-                // 4. Fluid Momentum Equation (x-direction)
-                hfv[0][4] = h_fluid * Vel[2];
-                hfv[1][4] = h_fluid * Vel[2] * Vel[2] + 0.5 * epsilon * h_total * h_fluid * gravity(2);
-                
-                // 5. Fluid momentum Equation (y-direction)
-                hfv[0][5] = hfv[0][5];
-                hfv[1][5] = hfv[0][5] * Vel[2];
-                
-            } else {
-                // Original TwoPhases model
-                hfv[1][0] = hfv[0][2] + hfv[0][4] * (1. - volf);
-                hfv[1][1] = hfv[0][2];
-                hfv[1][2] = hfv[0][2] * Vel[0] + 0.5 * (1. - den_frac) * temp * hfv[0][0];
-                hfv[1][3] = hfv[0][3] * Vel[0] + 0.5 * (1. - den_frac) * temp2;
-                hfv[1][4] = hfv[0][4] * Vel[2] + 0.5 * epsilon * hfv[0][0] * hfv[0][0] * gravity(2);
-                hfv[1][5] = hfv[0][5] * Vel[2];
-            }
+            hfv[1][0] = hfv[0][2] + hfv[0][4] * (1. - volf);
+            hfv[1][1] = hfv[0][2];
+            hfv[1][2] = hfv[0][2] * Vel[0] + 0.5 * (1. - den_frac) * temp * hfv[0][0];
+            hfv[1][3] = hfv[0][3] * Vel[0] + 0.5 * (1. - den_frac) * temp2;
+            hfv[1][4] = hfv[0][4] * Vel[2] + 0.5 * epsilon * hfv[0][0] * hfv[0][0] * gravity(2);
+            hfv[1][5] = hfv[0][5] * Vel[2];
 
             //wave speeds
             hfv[2][0] = Vel[0] - a;
@@ -2474,15 +2426,13 @@ void Element::ydirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
             if((0.0<Awet())&&(Awet()<1.0)) hfv[0][1]*=wetnessfactor;
 
             double temp= effect_kactxy(1)*hfv[0][1]*gravity(2);
-            a=sqrt(c_dmax1(0.0, temp + (hfv[0][0]-hfv[0][1])*gravity(2)));
+            a=sqrt(temp + (hfv[0][0]-hfv[0][1])*gravity(2));
             Vel[0]=Vel[1]=Vel[2]=Vel[3]=0.;
 
             //fluxes
             for (i=0; i<NUM_STATE_VARS; i++)
             hfv[1][i]=0.;
-            
-
-
+    
             //wave speeds
             hfv[2][0]=Vel[1]-a;
             hfv[2][1]=Vel[1];
@@ -2504,28 +2454,13 @@ void Element::ydirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
 
             // a = speed of sound through the medium
             double temp = effect_kactxy(1) * hfv[0][1] * gravity(2);
-            a = sqrt(c_dmax1(0.0, temp + (hfv[0][0] - hfv[0][1]) * gravity(2)));
+            a = sqrt(temp + (hfv[0][0] - hfv[0][1]) * gravity(2));
 
             // velocities
             Vel[0] = Vel[2] = 0.; // don't need them here
-            if (hfv[0][1] > GEOFLOW_TINY) {
-                Vel[1] = hfv[0][3] / hfv[0][1];
-            } else {
-                Vel[1] = 0.0;
-            }
-            
-            double h_fluid = hfv[0][0];
-            if (dynamic_cast<Integrator_TwoPhases_mu_I*>(integrator) != nullptr) {
-                h_fluid = hfv[0][0] - hfv[0][1];
-            } else {
-                h_fluid = hfv[0][0];
-            }
-            
-            if (h_fluid > GEOFLOW_TINY) {
-                Vel[3] = hfv[0][5] / h_fluid;
-            } else {
-                Vel[3] = 0.0;
-            }
+            Vel[1] = hfv[0][3] / hfv[0][1];
+            Vel[3] = hfv[0][5] / hfv[0][0];
+
             // hydostatic terms
             double dvdx = (d_state_vars(3) - d_state_vars(1) * Vel[1]) / state_vars(1);
             double alphayx = -c_sgn(dvdx) * sin(integrator->int_frict) * effect_kactxy(1);
@@ -2534,44 +2469,12 @@ void Element::ydirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
                 volf = hfv[0][1] / hfv[0][0];
 
             //fluxes
-                if (dynamic_cast<Integrator_TwoPhases_mu_I*>(integrator) != nullptr) {
-                    // Extract global state variables 
-                    // state_vars(0) is total mass, state_vars(1) is solid mass
-                    double h_total = hfv[0][0]; 
-                    double h_solid = hfv[0][1];
-                    double h_fluid = h_total - h_solid;
-                    
-                    // 0. Total Mass Equation (Y-direction)
-                    hfv[1][0] = h_solid * Vel[1] + h_fluid * Vel[3];
-                    
-                    // 1. Solid Mass Equation (Y-direction)
-                    hfv[0][1] = h_solid;                          
-                    hfv[1][1] = h_solid * Vel[1];
-                    
-                    // 2. Solid Momentum Equation (x-direction, in Y-flux)
-                    hfv[0][2] = hfv[0][2];
-                    hfv[1][2] = hfv[0][2] * Vel[1];
-                    
-                    // 3. Solid Momentum Equation (y-direction, in Y-flux)
-                    hfv[0][3] = hfv[0][3];
-                    hfv[1][3] = h_solid * Vel[1] * Vel[1] + 0.5 * epsilon * h_total * h_solid * gravity(2);
-                    
-                    // 4. Fluid Momentum Equation (x-direction, in Y-flux)
-                    hfv[0][4] = hfv[0][4];
-                    hfv[1][4] = hfv[0][4] * Vel[3];
-                    
-                    // 5. Fluid Momentum Equation (y-direction, in Y-flux)
-                    hfv[0][5] = h_fluid * Vel[3];
-                    hfv[1][5] = h_fluid * Vel[3] * Vel[3] + 0.5 * epsilon * h_total * h_fluid * gravity(2);
-                    
-                } else {
-                hfv[1][0] = hfv[0][3] + hfv[0][5] * (1. - volf);
-                hfv[1][1] = hfv[0][3];
-                hfv[1][2] = hfv[0][2] * Vel[1] + 0.5 * (1. - den_frac) * temp2;
-                hfv[1][3] = hfv[0][3] * Vel[1] + 0.5 * (1. - den_frac) * temp * hfv[0][0];
-                hfv[1][4] = hfv[0][4] * Vel[3];
-                hfv[1][5] = hfv[0][5] * Vel[3] + 0.5 * epsilon * hfv[0][0] * hfv[0][0] * gravity(2);
-            }
+            hfv[1][0] = hfv[0][3] + hfv[0][5] * (1. - volf);
+            hfv[1][1] = hfv[0][3];
+            hfv[1][2] = hfv[0][2] * Vel[1] + 0.5 * (1. - den_frac) * temp2;
+            hfv[1][3] = hfv[0][3] * Vel[1] + 0.5 * (1. - den_frac) * temp * hfv[0][0];
+            hfv[1][4] = hfv[0][4] * Vel[3];
+            hfv[1][5] = hfv[0][5] * Vel[3] + 0.5 * epsilon * hfv[0][0] * hfv[0][0] * gravity(2);
 
             //wave speeds
             hfv[2][0] = Vel[1] - a;
@@ -2609,7 +2512,7 @@ void Element::ydirflux(MatProps* matprops_ptr2, Integrator *integrator, double d
     
             // hydostatic terms
             double dvdx=(d_state_vars(3)-d_state_vars(1)*Vel[1])/state_vars(1);
-            double alphayx=-c_sgn(dvdx)*sin(matprops_ptr->int_frict)*effect_kactxy(1);
+            double alphayx=-c_sgn(dudy)*sin(matprops_ptr->int_frict)*effect_kactxy(1);
             double temp2=alphayx*hrfv[0][0]*hrfv[0][1]*gravity(2);
             if ( hrfv[0][0] > GEOFLOW_TINY )
             volf = hrfv[0][1]/hrfv[0][0];
@@ -2803,71 +2706,64 @@ void riemannflux(const ElementType elementType,double hfvl[3][MAX_NUM_STATE_VARS
     //l="left" (the minus side), r="right" (the plus side)
     
     int ivar;
-    double sl, sr;
     //this is the hll riemann flux
-    if(elementType == ElementType::TwoPhases)
+    if((hfvl[0][0] == 0.0) && (hfvr[0][0] == 0.0))
+        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
+            flux[ivar] = 0.0;
+    else
     {
-        if((hfvl[0][0] + hfvl[0][1] == 0.0) && (hfvr[0][0] + hfvr[0][1] == 0.0)) {
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                flux[ivar] = 0.0;
-            return;
-        }
-        else
-        {
-            if(hfvl[0][0] + hfvl[0][1] == 0.0)
-            {
-                sl = min(0.0, min(2.0 * hfvr[2][0] - hfvr[2][1], 2.0 * hfvr[2][3] - hfvr[2][4]));
-                sr = max(0.0, max(2.0 * hfvr[2][2] - hfvr[2][1], 2.0 * hfvr[2][5] - hfvr[2][4]));
-            }
-            else if(hfvr[0][0] + hfvr[0][1] == 0.0)
-            {
-                sl = min(0.0, min(2.0 * hfvl[2][0] - hfvl[2][1], 2.0 * hfvl[2][3] - hfvl[2][4]));
-                sr = max(0.0, max(2.0 * hfvl[2][2] - hfvl[2][1], 2.0 * hfvl[2][5] - hfvl[2][4]));
-            }
-            else
-            {
-                sl = min(0.0, min(min(hfvl[2][0], hfvl[2][3]), min(hfvr[2][0], hfvr[2][3])));
-                sr = max(0.0, max(max(hfvl[2][2], hfvl[2][5]), max(hfvr[2][2], hfvr[2][5])));
-            }
-        }
-    }
-    else if(elementType == ElementType::SinglePhase)
-    {
-        if((hfvl[0][0] == 0.0) && (hfvr[0][0] == 0.0)) {
-            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-                flux[ivar] = 0.0;
-            return;
-        }
-        else
+        double sl, sr;
+        if(elementType == ElementType::TwoPhases)
         {
             if(hfvl[0][0] == 0.0)
             {
-                sl = min(0.0, 2.0 * hfvr[2][0] - hfvr[2][1]);
-                sr = max(0.0, 2.0 * hfvr[2][2] - hfvr[2][1]);
+                sl = min(0, min(2.0 * hfvr[2][0] - hfvr[2][1], 2.0 * hfvr[2][3] - hfvr[2][4]));
+                sr = max(0, max(2.0 * hfvr[2][2] - hfvr[2][1], 2.0 * hfvr[2][5] - hfvr[2][4]));
             }
             else if(hfvr[0][0] == 0.0)
             {
-                sl = min(0.0, 2.0 * hfvl[2][0] - hfvl[2][1]);
-                sr = max(0.0, 2.0 * hfvl[2][2] - hfvl[2][1]);
+                sl = min(0, min(2.0 * hfvl[2][0] - hfvl[2][1], 2.0 * hfvl[2][3] - hfvl[2][4]));
+                sr = max(0, max(2.0 * hfvl[2][2] - hfvl[2][1], 2.0 * hfvl[2][5] - hfvl[2][4]));
             }
             else
             {
-                sl = min(0.0, min(hfvl[2][0], hfvr[2][0]));
-                sr = max(0.0, max(hfvl[2][2], hfvr[2][2]));
+                sl = min(0, min(min(hfvl[2][0], hfvl[2][3]), min(hfvr[2][0], hfvr[2][3])));
+                sr = max(0, max(max(hfvl[2][2], hfvl[2][5]), max(hfvr[2][2], hfvr[2][5])));
             }
         }
-    }
+        if(elementType == ElementType::SinglePhase)
+        {
+            if(hfvl[0][0] == 0.0)
+            {
+                sl = min(0, 2.0 * hfvr[2][0] - hfvr[2][1]);
+                sr = max(0, 2.0 * hfvr[2][2] - hfvr[2][1]);
+                //printf("hfvr=\n%12.6g   %12.6g   %12.6g\n%12.6g   %12.6g   %12.6g\n%12.6g   %12.6g   %12.6g\nsl=%12.6g   sr=%12.6g\n",hfvr[0][0],hfvr[1][0],hfvr[2][0],hfvr[0][1],hfvr[1][1],hfvr[2][1],hfvr[0][2],hfvr[1][2],hfvr[2][2],sl,sr);
+            }
+            else if(hfvr[0][0] == 0.0)
+            {
+                sl = min(0, 2.0 * hfvl[2][0] - hfvl[2][1]);
+                sr = max(0, 2.0 * hfvl[2][2] - hfvl[2][1]);
+                //printf("hfvl=\n%12.6g   %12.6g   %12.6g\n%12.6g   %12.6g   %12.6g\n%12.6g   %12.6g   %12.6g\nsl=%12.6g   sr=%12.6g\n",hfvl[0][0],hfvl[1][0],hfvl[2][0],hfvl[0][1],hfvl[1][1],hfvl[2][1],hfvl[0][2],hfvl[1][2],hfvl[2][2],sl,sr);
 
-    if(sl >= 0.0)
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            flux[ivar] = hfvl[1][ivar];
-    else if(sr <= 0.0)
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            flux[ivar] = hfvr[1][ivar];
-    else
-        for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
-            flux[ivar] = (sr * hfvl[1][ivar] - sl * hfvr[1][ivar] + sl * sr * (hfvr[0][ivar] - hfvl[0][ivar]))
-                    / (sr - sl);
+            }
+            else
+            {
+                sl = min(0, min(hfvl[2][0], hfvr[2][0]));
+                sr = max(0, max(hfvl[2][2], hfvr[2][2]));
+            }
+        }
+        
+        if(sl >= 0.0)
+            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
+                flux[ivar] = hfvl[1][ivar];
+        else if(sr <= 0.0)
+            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
+                flux[ivar] = hfvr[1][ivar];
+        else
+            for(ivar = 0; ivar < NUM_STATE_VARS; ivar++)
+                flux[ivar] = (sr * hfvl[1][ivar] - sl * hfvr[1][ivar] + sl * sr * (hfvr[0][ivar] - hfvl[0][ivar]))
+                        / (sr - sl);
+    }
     
     return;
 }

@@ -18,9 +18,7 @@ sim.setNumProp(
 sim.setMatModel(
     model='Coulomb',
     int_frict=37.0,
-    bed_frict=27.0,
-    do_erosion=1,
-    erosion_rate=0.1
+    bed_frict=27.0
 )
 sim.addPile(
     pile_type='Cylinder',

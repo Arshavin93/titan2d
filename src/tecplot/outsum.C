@@ -40,30 +40,12 @@ void output_summary(TimeProps* timeprops, StatProps* statprops, int savefileflag
     double seconds;
     timeprops->chunktime(&hours, &minutes, &seconds);
     
-    if (statprops->ElemTable->elementType_ == ElementType::TwoPhases) {
-        fprintf(fp,
-                "%d:%02d:%g (hrs:min:sec)   iter=%8d   vmean_solid=%g [m/s]   vmean_fluid=%g [m/s]   hmax_solid=%g [m]   hmax_fluid=%g [m]   Xcen=%g [m]   Ycen=%g [m]   <(X-<X>)^2>=%g [m^2]   <(Y-<Y>)^2>=%g [m^2]   area=%g [m^2]   stat volume=%g [m^3]   solid volume=%g [m^3]   fluid volume=%g [m^3]   eroded_solid=%g [m^3]   entrain_in=%g [m^3]   entrain_out=%g [m^3]   entrain_net=%g [m^3]   deposited_solid=%g [m^3]   outflow_solid=%g [m^3]   forceint=%g [m/s^2]   forcebed=%g [m/s^2]   slope=%g   savefile=%d\n",
-                hours, minutes, seconds, timeprops->iter,
-                (statprops->realvolume_fluid > 0.0) ? (statprops->vmean * statprops->statvolume / statprops->realvolume_fluid) : 0.0,
-                ((statprops->realvolume - statprops->realvolume_fluid) > 0.0) ? (statprops->vmean_fluid * statprops->statvolume / (statprops->realvolume - statprops->realvolume_fluid)) : 0.0,
-                statprops->hmax_fluid, statprops->hmax_true_fluid, statprops->xcen,
-                statprops->ycen, statprops->xvar, statprops->yvar, statprops->area, statprops->statvolume,
-                statprops->realvolume_fluid, statprops->realvolume - statprops->realvolume_fluid,
-                statprops->erodedvol,
-                statprops->erodedvol_fluid,          // entrain_in  (cumulative +ve vol, fluid INTO mixture)
-                statprops->outflowvol_fluid,         // entrain_out (cumulative -ve vol, fluid OUT of mixture)
-                statprops->erodedvol_fluid + statprops->outflowvol_fluid,  // entrain_net (algebraic sum)
-                statprops->depositedvol,
-                statprops->outflowvol,
-                statprops->forceint, statprops->forcebed, statprops->slopemean, savefileflag);
-    } else {
-        fprintf(fp,
-                "%d:%02d:%g (hrs:min:sec)   iter=%8d   Vave=%g [m/s]   hmax=%g [m]   Xcen=%g [m]   Ycen=%g [m]   <(X-<X>)^2>=%g [m^2]   <(Y-<Y>)^2>=%g [m^2]   area=%g [m^2]   stat volume=%g [m^3]   real volume=%g [m^3]   eroded volume=%g [m^3]   deposited volume=%g [m^3]   outflow volume=%g [m^3]   forceint=%g [m/s^2]   forcebed=%g [m/s^2]   slope=%g   savefile=%d\n",
-                hours, minutes, seconds, timeprops->iter, statprops->vmean, statprops->hmax, statprops->xcen,
-                statprops->ycen, statprops->xvar, statprops->yvar, statprops->area, statprops->statvolume,
-                statprops->realvolume, statprops->erodedvol, statprops->depositedvol, statprops->outflowvol,
-                statprops->forceint, statprops->forcebed, statprops->slopemean, savefileflag);
-    }
+    fprintf(fp,
+            "%d:%02d:%g (hrs:min:sec)   iter=%8d   Vave=%g [m/s]   hmax=%g [m]   Xcen=%g [m]   Ycen=%g [m]   <(X-<X>)^2>=%g [m^2]   <(Y-<Y>)^2>=%g [m^2]   area=%g [m^2]   stat volume=%g [m^3]   real volume=%g [m^3]   eroded volume=%g [m^3]   deposited volume=%g [m^3]   outflow volume=%g [m^3]   forceint=%g [m/s^2]   forcebed=%g [m/s^2]   slope=%g   savefile=%d\n",
+            hours, minutes, seconds, timeprops->iter, statprops->vmean, statprops->hmax, statprops->xcen,
+            statprops->ycen, statprops->xvar, statprops->yvar, statprops->area, statprops->statvolume,
+            statprops->realvolume, statprops->erodedvol, statprops->depositedvol, statprops->outflowvol,
+            statprops->forceint, statprops->forcebed, statprops->slopemean, savefileflag);
     fclose(fp);
     return;
 }

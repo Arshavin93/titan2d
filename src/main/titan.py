@@ -317,39 +317,6 @@ class TitanSimulationBase(object):
                     'conditions' :[lambda tsim,modprop,numprop: numprop['order']==1],
                     'constructor':Integrator_TwoPhases_Coulomb
             }]
-        },
-        'mu-I':{
-            'allParameters':('order','mu_s','mu_2','d','L_material','Beta'), 
-            'defaultParameters':{
-                'order':'First',
-                'mu_s':0.5,
-                'mu_2':0.7,
-                'd':0.1,
-                'L_material':0.25,
-                'Beta':0.6,
-            },
-            'elementType':ElementType_SinglePhase,
-            'integrators':[{
-                    'conditions' :[lambda tsim,modprop,numprop: numprop['order']==1],
-                    'constructor':Integrator_SinglePhase_mu_I
-            }]
-        },
-        'TwoPhases-mu-I':{
-            'allParameters':('order','mu_s','mu_2','d','L_material','Beta', 'alpha'), 
-            'defaultParameters':{
-                'order':'First',
-                'mu_s':0.5,
-                'mu_2':0.7,
-                'd':0.1,
-                'L_material':0.25,
-                'Beta':0.6,
-                'alpha':0.7
-            },
-            'elementType':ElementType_TwoPhases,
-            'integrators':[{
-                    'conditions' :[lambda tsim,modprop,numprop: numprop['order']==1],
-                    'constructor':Integrator_TwoPhases_mu_I
-            }]
         }
     }
     possible_stopping_criteria={
@@ -454,9 +421,8 @@ class TitanSimulationBase(object):
         self.ui_MatModel=None
         self.chk_MatModel=TiArgCheckerAndSetter(
             sectionName="setMatModel",
-            levelZeroParameters={
+            levelZeroParameters={                                      
             },
-            defaultParameters={},
             switchArguments={
                 'model':
                 {
@@ -515,25 +481,6 @@ class TitanSimulationBase(object):
                                 'bed_frict':{'desc':'',
                                                     'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk
                                                 }
-                            }
-                        ),
-                        'mu-I':TiArgCheckerAndSetter(
-                            levelZeroParameters={
-                                'mu_s':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'mu_2':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'd':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'L_material':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'Beta':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                            }
-                        ),
-                        'TwoPhases-mu-I':TiArgCheckerAndSetter(
-                            levelZeroParameters={
-                                'mu_s':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'mu_2':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'd':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'L_material':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'Beta':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
-                                'alpha':{'validator':VarType(float,conditions=[{'f':lambda v: v > 0,'msg':'should be positive!'}]).chk,'desc':''},
                             }
                         ),
                     }
@@ -713,14 +660,9 @@ class TitanSimulationBase(object):
                 'Vdirection':{'desc':'',
                     'validator':VarType(float).chk
                 },     
-                'vol_fract':{'desc':'',
-                    'validator':VarType(float,conditions=[
-                        {'f':lambda v: v >= 0.0,'msg':'should be >=0.0 and <=1.0!'},
-                        {'f':lambda v: v <=1.0,'msg':'should be >=0.0 and <=1.0!'}]).chk
-                },           
+                
             },
-            defaultParameters={'orientation':0.0,'Vmagnitude':0.0,'Vdirection':0.0,},
-            optionalParameters=['vol_fract']
+            defaultParameters={'orientation':0.0,'Vmagnitude':0.0,'Vdirection':0.0,}
         )
         #addDischargePlane
         self.ui_DischargePlane=[]
@@ -908,39 +850,20 @@ class TitanSimulationBase(object):
             return
         #######################################################################
         #check cross section
-        if self.ui_MatModel['model'] in ['TwoPhases-Pitman-Le', 'TwoPhases-mu-I']:
+        if self.ui_MatModel['model']=='TwoPhases-Pitman-Le':
             for pile in self.ui_Pile:
                 if 'vol_fract' not in pile:
-                    raise ValueError('TitanSimulation:addPile: TwoPhases model is set addPile should set vol_fract!')
-            for flux in self.ui_FluxSource:
-                if 'vol_fract' not in flux:
-                    raise ValueError('TitanSimulation:addFluxSource: TwoPhases model is set addFluxSource should set vol_fract!')
+                    raise ValueError('TitanSimulation:addFluxSource: TwoPhases-Pitman-Le is set addPile should set vol_fract!')
+            if len(self.ui_FluxSource)>0:
+                raise NotImplementedError("TitanSimulation:addFluxSource: FluxSources are not imlemented for TwoPhases-Pitman-Le model!")
             if len(self.ui_DischargePlane)>0:
-                raise NotImplementedError("TitanSimulation:addDischargePlane: DischargePlanes are not imlemented for two-phase models!")
+                raise NotImplementedError("TitanSimulation:addDischargePlane: DischargePlanes are not imlemented for TwoPhases-Pitman-Le model!")
             if len(self.ui_LocalQuants)>0:
-                raise NotImplementedError("TitanSimulation:addLocalQuants: LocalQuants are not imlemented for two-phase models!")
+                raise NotImplementedError("TitanSimulation:addLocalQuants: LocalQuants are not imlemented for TwoPhases-Pitman-Le model!")
         else:
             for pile in self.ui_Pile:
                 if 'vol_fract' in pile:
-                    raise ValueError('TitanSimulation:addPile: Single phase model is set, addPile should not have vol_fract argument!')
-            for flux in self.ui_FluxSource:
-                if 'vol_fract' in flux:
-                    raise ValueError('TitanSimulation:addFluxSource: Single phase model is set, addFluxSource should not have vol_fract argument!')
-        
-        # if self.ui_MatModel['model']=='TwoPhases-Pitman-Le':
-        #     for pile in self.ui_Pile:
-        #         if 'vol_fract' not in pile:
-        #             raise ValueError('TitanSimulation:addFluxSource: TwoPhases-Pitman-Le is set addPile should set vol_fract!')
-        #     if len(self.ui_FluxSource)>0:
-        #         raise NotImplementedError("TitanSimulation:addFluxSource: FluxSources are not imlemented for TwoPhases-Pitman-Le model!")
-        #     if len(self.ui_DischargePlane)>0:
-        #         raise NotImplementedError("TitanSimulation:addDischargePlane: DischargePlanes are not imlemented for TwoPhases-Pitman-Le model!")
-        #     if len(self.ui_LocalQuants)>0:
-        #         raise NotImplementedError("TitanSimulation:addLocalQuants: LocalQuants are not imlemented for TwoPhases-Pitman-Le model!")
-        # else:
-        #     for pile in self.ui_Pile:
-        #         if 'vol_fract' in pile:
-        #             raise ValueError('TitanSimulation:addFluxSource: Single phase model is set, addPile should not have vol_fract argument!')
+                    raise ValueError('TitanSimulation:addFluxSource: Single phase model is set, addPile should not have vol_fract argument!')
         
         #######################################################################
         #check satisfaction of integrator
@@ -1268,12 +1191,8 @@ class TitanSimulation(TitanSimulationBase):
         #######################################################################
         # ui_FluxSource
         for fluxSource in ui_FluxSource:
-            if 'vol_fract' in fluxSource:
-                self.sim.fluxprops.addFluxSource(fluxSource['influx'],fluxSource['start_time'],fluxSource['end_time'], fluxSource['center'][0], fluxSource['center'][1], fluxSource['radii'][0], 
-                    fluxSource['radii'][1],fluxSource['orientation'],fluxSource['Vmagnitude'],fluxSource['Vdirection'],fluxSource['vol_fract'])
-            else:
-                self.sim.fluxprops.addFluxSource(fluxSource['influx'],fluxSource['start_time'],fluxSource['end_time'], fluxSource['center'][0], fluxSource['center'][1], fluxSource['radii'][0], 
-                    fluxSource['radii'][1],fluxSource['orientation'],fluxSource['Vmagnitude'],fluxSource['Vdirection'])
+            self.sim.fluxprops.addFluxSource(fluxSource['influx'],fluxSource['start_time'],fluxSource['end_time'], fluxSource['center'][0], fluxSource['center'][1], fluxSource['radii'][0], 
+                fluxSource['radii'][1],fluxSource['orientation'],fluxSource['Vmagnitude'],fluxSource['Vdirection'])
         #######################################################################
         # ui_DischargePlane
         for disPlane in ui_DischargePlane:
